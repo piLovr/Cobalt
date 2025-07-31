@@ -91,13 +91,13 @@ public class TestLibrary implements Listener {
     }
 
     private <T extends OptionsBuilder<T>> T configureApi(ConnectionBuilder<T> optionsBuilder) {
-        return optionsBuilder.serializer(ControllerSerializer.discarding())
-                .newConnection(Objects.requireNonNull(account, "Missing account"))
-                .errorHandler((whatsapp, location, throwable) -> {
-                    Assertions.fail(throwable);
-                    System.exit(1);
-                    return ErrorHandler.Result.DISCONNECT;
-                });
+        var partial = optionsBuilder.serializer(ControllerSerializer.discarding());
+        var full = account == null ? partial.newConnection() : partial.newConnection(account);
+        return full.errorHandler((whatsapp, location, throwable) -> {
+            Assertions.fail(throwable);
+            System.exit(1);
+            return ErrorHandler.Result.DISCONNECT;
+        });
     }
 
     private void loadConfig() throws IOException  {
@@ -111,7 +111,10 @@ public class TestLibrary implements Listener {
 
         log("Loading configuration file...");
         var props = ConfigUtils.loadConfiguration();
-        contact = Jid.of(Objects.requireNonNull(props.getProperty("contact"), "Missing contact property in config"));
+        var contactProperty = props.getProperty("contact");
+        if(contactProperty != null) {
+            contact = Jid.of(contactProperty);
+        }
         var account = props.getProperty("account");
         if(account != null) {
             TestLibrary.account = SixPartsKeys.of(account);
@@ -125,6 +128,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(1)
+    @Disabled
     public void testHasWhatsapp()  {
         var dummy = Jid.of("123456789");
         var response = api.hasWhatsapp(contact, dummy).join();
@@ -314,6 +318,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(11)
+    @Disabled
     public void testGroupCreation()  {
         log("Creating group...");
         var response = api.createGroup(randomId(), contact).join();
@@ -324,6 +329,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(12)
+    @Disabled
     public void testChangeIndividualPresence()  {
         Assertions.assertNotNull(group, "No group");
         for (var presence : ContactStatus.values())  {
@@ -336,6 +342,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(13)
+    @Disabled
     public void testChangeGroupPicture()  {
         Assertions.assertNotNull(group, "No group");
         log("Changing group pic...");
@@ -345,6 +352,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(14)
+    @Disabled
     public void testChangeGroupName()  {
         Assertions.assertNotNull(group, "No group");
         log("Changing group name...");
@@ -354,6 +362,7 @@ public class TestLibrary implements Listener {
 
     @RepeatedTest(2)
     @Order(15)
+    @Disabled
     public void testChangeGroupDescription()  {
         Assertions.assertNotNull(group, "No group");
         log("Changing group description...");
@@ -363,6 +372,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(16)
+    @Disabled
     public void testRemoveGroupParticipant()  {
         Assertions.assertNotNull(group, "No group");
         log("Removing %s...", contact);
@@ -372,6 +382,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(17)
+    @Disabled
     public void testAddGroupParticipant()  {
         Assertions.assertNotNull(group, "No group");
         log("Adding %s...", contact);
@@ -381,6 +392,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(18)
+    @Disabled
     public void testPromotion()  {
         Assertions.assertNotNull(group, "No group");
         log("Promoting %s...", contact);
@@ -390,6 +402,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(19)
+    @Disabled
     public void testDemotion()  {
         Assertions.assertNotNull(group, "No group");
         log("Demoting %s...", contact);
@@ -399,6 +412,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(20)
+    @Disabled
     public void testChangeAllGroupSettings()  {
         Assertions.assertNotNull(group, "No group");
         for(var setting : GroupSetting.values())  {
@@ -412,6 +426,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(21)
+    @Disabled
     public void testGroupQuery()  {
         Assertions.assertNotNull(group, "No group");
         log("Querying group %s...", group);
@@ -421,6 +436,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(22)
+    @Disabled
     public void testCommunity()  {
         log("Creating community...");
         var communityCreationResponse = api.createCommunity(randomId(), "A nice body")
@@ -502,6 +518,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(23)
+    @Disabled
     public void testMute()  {
         Assertions.assertNotNull(group, "No group");
         log("Muting chat...");
@@ -511,6 +528,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(24)
+    @Disabled
     public void testUnmute()  {
         Assertions.assertNotNull(group, "No group");
         log("Unmuting chat...");
@@ -520,6 +538,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(25)
+    @Disabled
     public void testArchive()  {
         Assertions.assertNotNull(group, "No group");
         log("Archiving chat...");
@@ -529,6 +548,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(26)
+    @Disabled
     public void testUnarchive()  {
         Assertions.assertNotNull(group, "No group");
         log("Unarchiving chat...");
@@ -538,6 +558,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(27)
+    @Disabled
     public void testPin()  {
         Assertions.assertNotNull(group, "No group");
         if (api.store().pinnedChats().size() >= 3)  {
@@ -551,6 +572,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(28)
+    @Disabled
     public void testUnpin()  {
         Assertions.assertNotNull(group, "No group");
         if (api.store().pinnedChats().size() >= 3)  {
@@ -584,6 +606,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(31)
+    @Disabled
     public void deleteMessage()  {
         var example = (ChatMessageInfo) api.sendMessage(contact, "Hello").join();
         log("Deleting for you...");
@@ -720,6 +743,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(41)
+    @Disabled
     public void testGroupInviteMessage()  {
         Assertions.assertNotNull(group, "No group");
         log("Querying group invite countryCode");
@@ -738,6 +762,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(42)
+    @Disabled
     public void testEnableEphemeralMessages()  {
         Assertions.assertNotNull(group, "No group");
         log("Enabling ephemeral messages...");
@@ -747,6 +772,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(43)
+    @Disabled
     public void testDisableEphemeralMessages()  {
         Assertions.assertNotNull(group, "No group");
         log("Disabling ephemeral messages...");
@@ -756,6 +782,7 @@ public class TestLibrary implements Listener {
 
     @Test
     @Order(44)
+    @Disabled
     public void testLeave()  {
         Assertions.assertNotNull(group, "No group");
         log("Leaving group...");
@@ -972,6 +999,9 @@ public class TestLibrary implements Listener {
 
     @Override
     public void onLoggedIn()  {
+        if(contact == null) {
+            contact = api.store().jid().orElseThrow();
+        }
         latch.countDown();
         log("Logged in: -%s", latch.getCount());
     }

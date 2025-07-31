@@ -258,9 +258,9 @@ public class SocketHandler implements SocketSession.Listener {
         try(var stream = Streams.newInputStream(output)) {
             while(stream.available() > 0) {
                 var node = BinaryDecoder.decode(Streams.newInputStream(output));
-                onNodeReceived(node);
+                onNodeReceived(node); //janjan
                 store.resolvePendingRequest(node);
-                streamHandler.digest(node);
+                streamHandler.digest(node); //
             }
         }
     }
