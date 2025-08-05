@@ -1,6 +1,6 @@
 package it.auties.whatsapp.controller;
 
-import it.auties.whatsapp.api.ClientType;
+import it.auties.whatsapp.api.WhatsappClientType;
 import it.auties.whatsapp.model.mobile.PhoneNumber;
 
 import java.nio.file.Path;
@@ -8,7 +8,6 @@ import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * This interface provides a standardized way to serialize a session
@@ -52,7 +51,7 @@ public interface ControllerSerializer {
      * @param type the non-null type of client
      * @return a non-null linked list
      */
-    LinkedList<UUID> listIds(ClientType type);
+    LinkedList<UUID> listIds(WhatsappClientType type);
 
     /**
      * Returns all the known IDs
@@ -60,7 +59,7 @@ public interface ControllerSerializer {
      * @param type the non-null type of client
      * @return a non-null linked list
      */
-    LinkedList<PhoneNumber> listPhoneNumbers(ClientType type);
+    LinkedList<PhoneNumber> listPhoneNumbers(WhatsappClientType type);
 
     /**
      * Creates a fresh pair of store and keys
@@ -71,13 +70,13 @@ public interface ControllerSerializer {
      * @param clientType  the non-null client type
      * @return a non-null store-keys pair
      */
-    default StoreKeysPair newStoreKeysPair(UUID uuid, PhoneNumber phoneNumber, Collection<String> alias, ClientType clientType) {
+    default StoreKeysPair newStoreKeysPair(UUID uuid, PhoneNumber phoneNumber, Collection<String> alias, WhatsappClientType clientType) {
         var store = Store.of(uuid, phoneNumber, alias, clientType);
         store.setSerializer(this);
-        linkMetadata(store);
+        serializeStore(store);
         var keys = Keys.of(uuid, phoneNumber, alias, clientType);
         keys.setSerializer(this);
-        serializeKeys(keys, true);
+        serializeKeys(keys);
         return new StoreKeysPair(store, keys);
     }
 
@@ -90,157 +89,142 @@ public interface ControllerSerializer {
      * @param clientType  the non-null client type
      * @return an optional store-keys pair
      */
-    default Optional<StoreKeysPair> deserializeStoreKeysPair(UUID uuid, PhoneNumber phoneNumber, String alias, ClientType clientType) {
+    @SuppressWarnings("DuplicatedCode")
+    default Optional<StoreKeysPair> deserializeStoreKeysPair(UUID uuid, PhoneNumber phoneNumber, String alias, WhatsappClientType clientType) {
         if (uuid != null) {
-            var store = deserializeStore(clientType, uuid);
-            if(store.isEmpty()) {
-                return Optional.empty();
+            var store = deserializeStore(clientType, uuid)
+                    .orElse(null);
+            var keys = deserializeKeys(clientType, uuid)
+                    .orElse(null);
+            var result = createStoreKeysPair(store, keys);
+            if(result.isPresent()) {
+                return result;
             }
-
-            store.get().setSerializer(this);
-            attributeStore(store.get());
-            var keys = deserializeKeys(clientType, uuid);
-            if(keys.isEmpty()) {
-                return Optional.empty();
-            }
-
-            keys.get().setSerializer(this);
-            return Optional.of(new StoreKeysPair(store.get(), keys.get()));
         }
 
         if (phoneNumber != null) {
-            var store = deserializeStore(clientType, phoneNumber);
-            if(store.isEmpty()) {
-                return Optional.empty();
+            var store = deserializeStore(clientType, phoneNumber)
+                    .orElse(null);
+            var keys = deserializeKeys(clientType, phoneNumber)
+                    .orElse(null);
+            var result = createStoreKeysPair(store, keys);
+            if(result.isPresent()) {
+                return result;
             }
-
-            store.get().setSerializer(this);
-            attributeStore(store.get());
-            var keys = deserializeKeys(clientType, phoneNumber);
-            if(keys.isEmpty()) {
-                return Optional.empty();
-            }
-
-            keys.get().setSerializer(this);
-            return Optional.of(new StoreKeysPair(store.get(), keys.get()));
         }
 
         if (alias != null) {
-            var store = deserializeStore(clientType, alias);
-            if(store.isEmpty()) {
-                return Optional.empty();
+            var store = deserializeStore(clientType, alias)
+                    .orElse(null);
+            var keys = deserializeKeys(clientType, alias)
+                    .orElse(null);
+            var result = createStoreKeysPair(store, keys);
+            if(result.isPresent()) {
+                return result;
             }
-
-            store.get().setSerializer(this);
-            attributeStore(store.get());
-            var keys = deserializeKeys(clientType,  alias);
-            if(keys.isEmpty()) {
-                return Optional.empty();
-            }
-
-            keys.get().setSerializer(this);
-            return Optional.of(new StoreKeysPair(store.get(), keys.get()));
         }
 
         return Optional.empty();
+    }
+
+    private Optional<StoreKeysPair> createStoreKeysPair(Store store, Keys keys) {
+        if (store == null || keys == null) {
+            return Optional.empty();
+        }
+        store.setSerializer(this);
+        keys.setSerializer(this);
+        var result = new StoreKeysPair(store, keys);
+        return Optional.of(result);
     }
 
     /**
      * Serializes the keys
      *
      * @param keys  the non-null keys to serialize
-     * @param async whether the operation should be executed asynchronously
      */
-    CompletableFuture<Void> serializeKeys(Keys keys, boolean async);
+    void serializeKeys(Keys keys);
 
     /**
      * Serializes the store
      *
      * @param store the non-null store to serialize
-     * @param async whether the operation should be executed asynchronously
      */
-    CompletableFuture<Void> serializeStore(Store store, boolean async);
+    void serializeStore(Store store);
 
     /**
-     * Serializes the keys
+     * Deserializes the keys
      *
      * @param type the non-null type of client
      * @param id   the id of the keys
      * @return a non-null keys
      */
-    Optional<Keys> deserializeKeys(ClientType type, UUID id);
+    Optional<Keys> deserializeKeys(WhatsappClientType type, UUID id);
 
     /**
-     * Serializes the keys
+     * Deserializes the keys
      *
      * @param type        the non-null type of client
      * @param phoneNumber the phone number of the keys
      * @return a non-null keys
      */
-    Optional<Keys> deserializeKeys(ClientType type, PhoneNumber phoneNumber);
-
+    Optional<Keys> deserializeKeys(WhatsappClientType type, PhoneNumber phoneNumber);
 
     /**
-     * Serializes the keys
+     * Deserializes the keys
      *
      * @param type  the non-null type of client
      * @param alias the alias number of the keys
      * @return a non-null keys
      */
-    Optional<Keys> deserializeKeys(ClientType type, String alias);
+    Optional<Keys> deserializeKeys(WhatsappClientType type, String alias);
 
     /**
-     * Serializes the store
+     * Deserializes the store
+     * This method should only block to deserialize the data related to the store that is strictly necessary to boostrap a session
+     * Everything else, like the chats and newsletters, should be deserialized in a non-blocking fashion
      *
      * @param type the non-null type of client
      * @param id   the id of the store
      * @return a non-null store
+     * @see ControllerSerializer#finishDeserializeStore(Store)
      */
-    Optional<Store> deserializeStore(ClientType type, UUID id);
+    Optional<Store> deserializeStore(WhatsappClientType type, UUID id);
 
     /**
-     * Serializes the store
+     * Deserializes the store
+     * This method should only block to deserialize the data related to the store that is strictly necessary to boostrap a session
+     * Everything else, like the chats and newsletters, should be deserialized in a non-blocking fashion
      *
      * @param type        the non-null type of client
      * @param phoneNumber the phone number of the store
      * @return a non-null store
+     * @see ControllerSerializer#finishDeserializeStore(Store)
      */
-    Optional<Store> deserializeStore(ClientType type, PhoneNumber phoneNumber);
+    Optional<Store> deserializeStore(WhatsappClientType type, PhoneNumber phoneNumber);
 
     /**
-     * Serializes the store
+     * Deserializes the store
+     * This method should only block to deserialize the data related to the store that is strictly necessary to boostrap a session
+     * Everything else, like the chats and newsletters, should be deserialized in a non-blocking fashion
      *
      * @param type  the non-null type of client
      * @param alias the alias of the store
      * @return a non-null store
+     * @see ControllerSerializer#finishDeserializeStore(Store)
      */
-    Optional<Store> deserializeStore(ClientType type, String alias);
+    Optional<Store> deserializeStore(WhatsappClientType type, String alias);
 
     /**
      * Deletes a session
      *
      * @param controller the non-null controller
      */
-    void deleteSession(Controller<?> controller);
+    void deleteSession(Controller controller);
 
     /**
-     * Creates a link between the session and its metadata, usually phone number and alias
+     * Waits for the store to be done deserializing
      *
-     * @param controller a non-null controller
+     * @param store a non-null store
      */
-    default void linkMetadata(Controller<?> controller) {
-
-    }
-
-    /**
-     * Attributes the store asynchronously. This method is optionally used to load asynchronously
-     * heavy data such as chats while the socket is connecting. If implemented, cache the returning
-     * newsletters because the method may be called multiple times.
-     *
-     * @param store the non-null store to attribute
-     * @return a completable newsletters
-     */
-    default CompletableFuture<Void> attributeStore(Store store) {
-        return CompletableFuture.completedFuture(null);
-    }
+    void finishDeserializeStore(Store store);
 }

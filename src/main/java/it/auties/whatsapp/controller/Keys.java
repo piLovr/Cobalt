@@ -3,7 +3,7 @@ package it.auties.whatsapp.controller;
 import it.auties.protobuf.annotation.ProtobufMessage;
 import it.auties.protobuf.annotation.ProtobufProperty;
 import it.auties.protobuf.model.ProtobufType;
-import it.auties.whatsapp.api.ClientType;
+import it.auties.whatsapp.api.WhatsappClientType;
 import it.auties.whatsapp.model.companion.CompanionHashState;
 import it.auties.whatsapp.model.companion.CompanionSyncKey;
 import it.auties.whatsapp.model.companion.CompanionSyncKeyBuilder;
@@ -28,7 +28,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -39,7 +38,7 @@ import static java.util.Objects.requireNonNullElseGet;
  */
 @SuppressWarnings({"unused", "UnusedReturnValue"})
 @ProtobufMessage
-public final class Keys extends Controller<Keys> {
+public final class Keys extends Controller {
     /**
      * The client id
      */
@@ -174,22 +173,7 @@ public final class Keys extends Controller<Keys> {
     @ProtobufProperty(index = 25, type = ProtobufType.BOOL)
     boolean initialAppSync;
 
-    /**
-     * Write counter for IV
-     */
-    final AtomicLong writeCounter;
-
-    /**
-     * Read counter for IV
-     */
-    final AtomicLong readCounter;
-
-    /**
-     * Session dependent keys to write and read cyphered messages
-     */
-    byte[] writeKey, readKey;
-
-    Keys(UUID uuid, PhoneNumber phoneNumber, ClientType clientType, Collection<String> alias, Integer registrationId, SignalKeyPair noiseKeyPair, SignalKeyPair ephemeralKeyPair, SignalKeyPair identityKeyPair, SignalKeyPair companionKeyPair, SignalSignedKeyPair signedKeyPair, byte[] signedKeyIndex, Long signedKeyIndexTimestamp, List<SignalPreKeyPair> preKeys, String fdid, byte[] deviceId, UUID advertisingId, byte[] identityId, byte[] backupToken, SignedDeviceIdentity companionIdentity, Map<SenderKeyName, SenderKeyRecord> senderKeys, List<CompanionSyncKey> appStateKeys, ConcurrentMap<SessionAddress, Session> sessions, ConcurrentMap<String, CompanionHashState> hashStates, ConcurrentMap<Jid, SenderPreKeys> groupsPreKeys, boolean registered, boolean businessCertificate, boolean initialAppSync) {
+    Keys(UUID uuid, PhoneNumber phoneNumber, WhatsappClientType clientType, Collection<String> alias, Integer registrationId, SignalKeyPair noiseKeyPair, SignalKeyPair ephemeralKeyPair, SignalKeyPair identityKeyPair, SignalKeyPair companionKeyPair, SignalSignedKeyPair signedKeyPair, byte[] signedKeyIndex, Long signedKeyIndexTimestamp, List<SignalPreKeyPair> preKeys, String fdid, byte[] deviceId, UUID advertisingId, byte[] identityId, byte[] backupToken, SignedDeviceIdentity companionIdentity, Map<SenderKeyName, SenderKeyRecord> senderKeys, List<CompanionSyncKey> appStateKeys, ConcurrentMap<SessionAddress, Session> sessions, ConcurrentMap<String, CompanionHashState> hashStates, ConcurrentMap<Jid, SenderPreKeys> groupsPreKeys, boolean registered, boolean businessCertificate, boolean initialAppSync) {
         super(uuid, phoneNumber, null, clientType, alias);
         this.registrationId = Objects.requireNonNullElseGet(registrationId, () -> ThreadLocalRandom.current().nextInt(16380) + 1);
         this.noiseKeyPair = Objects.requireNonNull(noiseKeyPair, "Missing noise keypair");
@@ -214,11 +198,9 @@ public final class Keys extends Controller<Keys> {
         this.registered = registered;
         this.businessCertificate = businessCertificate;
         this.initialAppSync = initialAppSync;
-        this.writeCounter = new AtomicLong();
-        this.readCounter = new AtomicLong();
     }
 
-    public static Keys of(UUID uuid, PhoneNumber phoneNumber, Collection<String> alias, ClientType clientType) {
+    public static Keys of(UUID uuid, PhoneNumber phoneNumber, Collection<String> alias, WhatsappClientType clientType) {
         return new KeysBuilder()
                 .uuid(uuid)
                 .phoneNumber(phoneNumber)
@@ -237,15 +219,6 @@ public final class Keys extends Controller<Keys> {
      */
     public byte[] encodedRegistrationId() {
         return Bytes.intToBytes(registrationId(), 4);
-    }
-
-    /**
-     * Clears the signal keys associated with this object
-     */
-    public void clearReadWriteKey() {
-        this.writeKey = null;
-        this.writeCounter.set(0);
-        this.readCounter.set(0);
     }
 
     /**
@@ -355,11 +328,9 @@ public final class Keys extends Controller<Keys> {
      *
      * @param address the non-null address
      * @param record  the non-null record
-     * @return this
      */
-    public Keys addSession(SessionAddress address, Session record) {
+    public void addSession(SessionAddress address, Session record) {
         sessions.put(address, record);
-        return this;
     }
 
     /**
@@ -367,11 +338,9 @@ public final class Keys extends Controller<Keys> {
      *
      * @param device the non-null device
      * @param state  the non-null hash state
-     * @return this
      */
-    public Keys addState(Jid device, CompanionHashState state) {
+    public void addState(Jid device, CompanionHashState state) {
         hashStates.put("%s_%s".formatted(device, state.type()), state);
-        return this;
     }
 
     /**
@@ -379,9 +348,8 @@ public final class Keys extends Controller<Keys> {
      *
      * @param jid  the non-null jid of the app key
      * @param keys the keys to add
-     * @return this
      */
-    public Keys addAppKeys(Jid jid, Collection<AppStateSyncKey> keys) {
+    public void addAppKeys(Jid jid, Collection<AppStateSyncKey> keys) {
         appStateKeys.stream()
                 .filter(preKey -> Objects.equals(preKey.companion(), jid))
                 .findFirst()
@@ -392,7 +360,6 @@ public final class Keys extends Controller<Keys> {
                             .build();
                     appStateKeys.add(syncKey);
                 });
-        return this;
     }
 
     /**
@@ -421,29 +388,9 @@ public final class Keys extends Controller<Keys> {
      * Adds the provided pre key to the pre keys
      *
      * @param preKey the key to add
-     * @return this
      */
-    public Keys addPreKey(SignalPreKeyPair preKey) {
+    public void addPreKey(SignalPreKeyPair preKey) {
         preKeys.add(preKey);
-        return this;
-    }
-
-    /**
-     * Returns write counter
-     *
-     * @return an unsigned long
-     */
-    public synchronized long nextWriteCounter() {
-        return writeCounter.getAndIncrement();
-    }
-
-    /**
-     * Returns read counter
-     *
-     * @return an unsigned long
-     */
-    public synchronized long nextReadCounter() {
-        return readCounter.getAndIncrement();
     }
 
     /**
@@ -456,24 +403,12 @@ public final class Keys extends Controller<Keys> {
     }
 
     /**
-     * This function sets the companionIdentity field to the value of the companionIdentity parameter,
-     * serializes the object, and returns the object.
-     *
-     * @param companionIdentity The identity of the companion device.
-     * @return The object itself.
-     */
-    public Keys companionIdentity(SignedDeviceIdentity companionIdentity) {
-        this.companionIdentity = companionIdentity;
-        return this;
-    }
-
-    /**
      * Returns the companion identity of this session
      * Only available for web sessions
      *
      * @return an optional
      */
-    public Optional<SignedDeviceIdentity> companionIdentity() {
+    public Optional<SignedDeviceIdentity> setCompanionIdentity() {
         return Optional.ofNullable(companionIdentity);
     }
 
@@ -517,12 +452,12 @@ public final class Keys extends Controller<Keys> {
 
     @Override
     public void dispose() {
-        serialize(false);
+        serialize();
     }
 
     @Override
-    public void serialize(boolean async) {
-        serializer.serializeKeys(this, async);
+    public void serialize() {
+        serializer.serializeKeys(this);
     }
 
     public int registrationId() {
@@ -589,61 +524,36 @@ public final class Keys extends Controller<Keys> {
         return this.initialAppSync;
     }
 
-    public Optional<byte[]> writeKey() {
-        return Optional.ofNullable(this.writeKey);
-    }
-
-    public Optional<byte[]> readKey() {
-        return Optional.ofNullable(this.readKey);
-    }
-
     public void setSignedKeyPair(SignalSignedKeyPair signedKeyPair) {
         this.signedKeyPair = signedKeyPair;
     }
 
-    public Keys setCompanionKeyPair(SignalKeyPair companionKeyPair) {
+    public void setCompanionKeyPair(SignalKeyPair companionKeyPair) {
         this.companionKeyPair = companionKeyPair;
-        return this;
     }
 
-    public Keys setSignedKeyIndex(byte[] signedKeyIndex) {
+    public void setSignedKeyIndex(byte[] signedKeyIndex) {
         this.signedKeyIndex = signedKeyIndex;
-        return this;
     }
 
-    public Keys setSignedKeyIndexTimestamp(Long signedKeyIndexTimestamp) {
+    public void setSignedKeyIndexTimestamp(Long signedKeyIndexTimestamp) {
         this.signedKeyIndexTimestamp = signedKeyIndexTimestamp;
-        return this;
     }
 
-    public Keys setCompanionIdentity(SignedDeviceIdentity companionIdentity) {
+    public void setCompanionIdentity(SignedDeviceIdentity companionIdentity) {
         this.companionIdentity = companionIdentity;
-        return this;
     }
 
-    public Keys setRegistered(boolean registered) {
+    public void setRegistered(boolean registered) {
         this.registered = registered;
-        return this;
     }
 
-    public Keys setBusinessCertificate(boolean businessCertificate) {
+    public void setBusinessCertificate(boolean businessCertificate) {
         this.businessCertificate = businessCertificate;
-        return this;
     }
 
-    public Keys setInitialAppSync(boolean initialAppSync) {
+    public void setInitialAppSync(boolean initialAppSync) {
         this.initialAppSync = initialAppSync;
-        return this;
-    }
-
-    public Keys setWriteKey(byte[] writeKey) {
-        this.writeKey = writeKey;
-        return this;
-    }
-
-    public Keys setReadKey(byte[] readKey) {
-        this.readKey = readKey;
-        return this;
     }
 
     /**

@@ -3,7 +3,7 @@ package it.auties.whatsapp.model.companion;
 import it.auties.protobuf.annotation.ProtobufMessage;
 import it.auties.protobuf.annotation.ProtobufProperty;
 import it.auties.protobuf.model.ProtobufType;
-import it.auties.whatsapp.api.ClientType;
+import it.auties.whatsapp.api.WhatsappClientType;
 import it.auties.whatsapp.model.signal.auth.UserAgent.PlatformType;
 import it.auties.whatsapp.model.signal.auth.Version;
 
@@ -74,7 +74,7 @@ public final class CompanionDevice {
     final String modelId;
 
     @ProtobufProperty(index = 9, type = ProtobufType.ENUM)
-    final ClientType clientType;
+    final WhatsappClientType clientType;
 
     CompanionDevice(
             String model,
@@ -84,7 +84,7 @@ public final class CompanionDevice {
             Version osVersion,
             String osBuildNumber,
             String modelId,
-            ClientType clientType
+            WhatsappClientType clientType
     ) {
         this.model = model;
         this.modelId = modelId;
@@ -100,16 +100,17 @@ public final class CompanionDevice {
         return web(null);
     }
 
+    // TODO: Use MAC_OS so that we have newsletter support when argo encoder is done
     public static CompanionDevice web(Version appVersion) {
         return new CompanionDevice(
-                "Chrome",
-                "Google",
-                PlatformType.WEB,
+                "Surface Pro 4",
+                "Microsoft",
+                PlatformType.WINDOWS,
                 appVersion,
-                Version.of("1.0"),
+                Version.of("10.0"),
                 null,
                 null,
-                ClientType.WEB
+                WhatsappClientType.WEB
         );
     }
 
@@ -136,7 +137,7 @@ public final class CompanionDevice {
                 Version.of(version.getKey()),
                 version.getValue(),
                 model.getValue(),
-                ClientType.MOBILE
+                WhatsappClientType.MOBILE
         );
     }
 
@@ -162,24 +163,7 @@ public final class CompanionDevice {
                 Version.of(String.valueOf(ThreadLocalRandom.current().nextInt(11, 16))),
                 null,
                 model,
-                ClientType.MOBILE
-        );
-    }
-
-    public static CompanionDevice kaiOs() {
-        return kaiOs(null);
-    }
-
-    public static CompanionDevice kaiOs(Version appVersion) {
-        return new CompanionDevice(
-                "8110",
-                "Nokia",
-                PlatformType.KAIOS,
-                appVersion,
-                Version.of("2.5.4"),
-                null,
-                "8110",
-                ClientType.MOBILE
+                WhatsappClientType.MOBILE
         );
     }
 
@@ -193,7 +177,6 @@ public final class CompanionDevice {
             case ANDROID_BUSINESS -> "SMBA";
             case IOS -> "iOS";
             case IOS_BUSINESS -> "SMB iOS";
-            case KAIOS -> "KaiOS";
             default -> null;
         };
         if(platformName == null) {
@@ -203,14 +186,13 @@ public final class CompanionDevice {
         var deviceName = switch (platform()) {
             case ANDROID, ANDROID_BUSINESS -> manufacturer + "-" + model;
             case IOS, IOS_BUSINESS -> model;
-            case KAIOS -> manufacturer + "+" + model;
             default -> null;
         };
         if(deviceName == null) {
             return Optional.empty();
         }
 
-        var deviceVersion = platform.isKaiOs() ? "%s+20190925153113".formatted(osVersion) : osVersion.toString();
+        var deviceVersion = osVersion.toString();
         return Optional.of("WhatsApp/%s %s/%s Device/%s".formatted(
                 appVersion,
                 platformName,
@@ -272,7 +254,7 @@ public final class CompanionDevice {
         return osVersion;
     }
 
-    public ClientType clientType() {
+    public WhatsappClientType clientType() {
         return clientType;
     }
 
