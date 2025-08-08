@@ -84,7 +84,7 @@ public final class SocketHandler {
         this.streamHandler = new StreamHandler(this, webVerificationHandler);
         this.messageHandler = new MessageHandler(this);
         this.appStateHandler = new AppStateHandler(this);
-        this.errorHandler = Objects.requireNonNullElse(errorHandler, WhatsappErrorHandler.toTerminal());
+        this.errorHandler = errorHandler;
         this.pastParticipants = new ConcurrentHashMap<>();
         this.chatMetadataCache = new ConcurrentHashMap<>();
         this.pendingRequests = new ConcurrentHashMap<>();
@@ -122,9 +122,6 @@ public final class SocketHandler {
     private void handleMessage(ByteBuffer message)  {
         try {
             message = encryptionHandler.receiveDeciphered(message);
-            if (message == null) {
-                return;
-            }
         }catch (Throwable throwable) {
             handleFailure(CRYPTOGRAPHY, throwable);
             return;
@@ -248,15 +245,18 @@ public final class SocketHandler {
 
     private void onDisconnected(WhatsappDisconnectReason reason) {
         encryptionHandler.reset();
-        pendingRequests.forEach((_, request) -> request.complete(Node.empty()));
+        pendingRequests.forEach((ignored, request) -> request.complete(Node.empty()));
         pendingRequests.clear();
         if (reason == WhatsappDisconnectReason.LOGGED_OUT || reason == WhatsappDisconnectReason.BANNED) {
             store.deleteSession();
             serializable.set(false);
         }
-        if(reason != WhatsappDisconnectReason.RECONNECTING && shutdownHook != null) {
-            Runtime.getRuntime().removeShutdownHook(shutdownHook);
-            shutdownHook = null;
+        if(reason != WhatsappDisconnectReason.RECONNECTING) {
+            if(shutdownHook != null) {
+                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                shutdownHook = null;
+            }
+            onShutdown();
         }
         callListenersSync(listener -> {
             listener.onDisconnected(whatsapp, reason);

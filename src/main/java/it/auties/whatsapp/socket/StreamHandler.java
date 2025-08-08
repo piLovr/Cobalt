@@ -56,15 +56,13 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.ZonedDateTime;
 import java.time.chrono.ChronoZonedDateTime;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -77,7 +75,7 @@ import static it.auties.whatsapp.util.SignalConstants.KEY_BUNDLE_TYPE;
 final class StreamHandler {
     private static final byte[] DEVICE_WEB_SIGNATURE_HEADER = {6, 1};
     private static final int PRE_KEYS_UPLOAD_CHUNK = 10;
-    private static final int PING_INTERVAL = 20;
+    private static final int PING_INTERVAL = 30;
     private static final int MAX_MESSAGE_RETRIES = 5;
     private static final int DEFAULT_NEWSLETTER_MESSAGES = 100;
     private static final byte[][] CALL_RELAY = new byte[][]{
@@ -94,6 +92,7 @@ final class StreamHandler {
     private final Map<String, Integer> retries;
     private final AtomicReference<String> lastLinkCodeKey;
     private final AtomicBoolean retriedConnection;
+    private final ExecutorService dispatcher;
 
     StreamHandler(SocketHandler socketHandler, WhatsappVerificationHandler.Web webVerificationHandler) {
         this.socketHandler = socketHandler;
@@ -101,23 +100,26 @@ final class StreamHandler {
         this.retries = new ConcurrentHashMap<>();
         this.lastLinkCodeKey = new AtomicReference<>();
         this.retriedConnection = new AtomicBoolean(false);
+        this.dispatcher = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory());
     }
 
-    void digest(Node node) throws IOException {
-        switch (node.description()) {
-            case "ack" -> digestAck(node);
-            case "call" -> digestCall(node);
-            case "failure" -> digestFailure(node);
-            case "ib" -> digestIb(node);
-            case "iq" -> digestIq(node);
-            case "receipt" -> digestReceipt(node);
-            case "stream:error" -> digestError(node);
-            case "success" -> digestSuccess(node);
-            case "message" -> socketHandler.decodeMessage(node, null, true);
-            case "notification" -> digestNotification(node);
-            case "presence", "chatstate" -> digestChatState(node);
-            case "xmlstreamend" -> socketHandler.disconnect(WhatsappDisconnectReason.RECONNECTING);
-        }
+    void digest(Node node) {
+        dispatcher.execute(() -> {
+            switch (node.description()) {
+                case "ack" -> digestAck(node);
+                case "call" -> digestCall(node);
+                case "failure" -> digestFailure(node);
+                case "ib" -> digestIb(node);
+                case "iq" -> digestIq(node);
+                case "receipt" -> digestReceipt(node);
+                case "stream:error" -> digestError(node);
+                case "success" -> digestSuccess(node);
+                case "message" -> socketHandler.decodeMessage(node, null, true);
+                case "notification" -> digestNotification(node);
+                case "presence", "chatstate" -> digestChatState(node);
+                case "xmlstreamend" -> socketHandler.disconnect(WhatsappDisconnectReason.RECONNECTING);
+            }
+        });
     }
 
     private void digestFailure(Node node) {
@@ -934,7 +936,7 @@ final class StreamHandler {
                 Node.of("clean", Map.of("type", type, "timestamp", timestamp)));
     }
 
-    private void digestError(Node node) throws IOException {
+    private void digestError(Node node) {
         if(node.hasNode("conflict")) {
             socketHandler.disconnect(WhatsappDisconnectReason.RECONNECTING);
             return;
@@ -956,7 +958,7 @@ final class StreamHandler {
         }
     }
 
-    private void handleStreamError(Node node) throws IOException {
+    private void handleStreamError(Node node) {
         var child = node.children().getFirst();
         var type = child.attributes().getString("type");
         var reason = child.attributes().getString("reason", type);
@@ -969,19 +971,10 @@ final class StreamHandler {
     }
 
     private void digestSuccess(Node node) {
-        node.attributes().getOptionalJid("lid")
+        node.attributes()
+                .getOptionalJid("lid")
                 .ifPresent(socketHandler.store()::setLid);
         finishLogin();
-    }
-
-    private void attributeStore() {
-        try {
-            socketHandler.store()
-                    .serializer()
-                    .finishDeserializeStore(socketHandler.store());
-        } catch (Exception exception) {
-            socketHandler.handleFailure(MESSAGE, exception);
-        }
     }
 
     private void finishLogin() {
@@ -993,12 +986,10 @@ final class StreamHandler {
 
     private void finishWebLogin() {
         try {
-            if (!socketHandler.keys().initialAppSync()){
+            if (socketHandler.keys().initialAppSync()) {
+                notifyStore();
+            } else {
                 queryGroups();
-            }else {
-                socketHandler.onChats();
-                socketHandler.onContacts();
-                socketHandler.onNewsletters();
             }
             setActiveConnection();
             queryRequiredWebInfo();
@@ -1011,10 +1002,24 @@ final class StreamHandler {
             queryInitialDisappearingMode();
             queryInitialBlockList();
             onInitialInfo();
-            attributeStore();
         } catch (Exception throwable) {
             socketHandler.handleFailure(LOGIN, throwable);
         }
+    }
+
+    private void notifyStore() {
+        Thread.startVirtualThread(() -> {
+            try {
+                socketHandler.store()
+                        .serializer()
+                        .finishDeserializeStore(socketHandler.store());
+                socketHandler.onChats();
+                socketHandler.onContacts();
+                socketHandler.onNewsletters();
+            } catch (Exception exception) {
+                socketHandler.handleFailure(LOGIN, exception);
+            }
+        });
     }
 
     private void setActiveConnection() {
@@ -1062,9 +1067,7 @@ final class StreamHandler {
                 socketHandler.keys().setInitialAppSync(true);
                 socketHandler.disconnect(WhatsappDisconnectReason.RECONNECTING);
             }else {
-                socketHandler.onChats();
-                socketHandler.onContacts();
-                socketHandler.onNewsletters();
+                notifyStore();
                 setupRescueToken();
                 setActiveConnection();
                 queryMobileSessionMex();
@@ -1074,7 +1077,6 @@ final class StreamHandler {
                 scheduleMediaConnectionUpdate();
                 sendWam2();
                 onInitialInfo();
-                attributeStore();
             }
         } catch (Exception throwable) {
             socketHandler.handleFailure(LOGIN, throwable);
@@ -1234,10 +1236,6 @@ final class StreamHandler {
 
     private void queryGroups() {
         var result = socketHandler.sendQuery(JidServer.groupOrCommunity().toJid(), "get", "w:g2", Node.of("participating", Node.of("participants"), Node.of("description")));
-        onGroupsQuery(result);
-    }
-
-    private void onGroupsQuery(Node result) {
         var groups = result.findChild("groups");
         if (groups.isEmpty()) {
             return;
@@ -1470,7 +1468,7 @@ final class StreamHandler {
             }else {
                 serializeSession();
             }
-        }, PING_INTERVAL / 2, PING_INTERVAL);
+        }, PING_INTERVAL, PING_INTERVAL);
     }
 
     private void scheduleMediaConnectionUpdate() {
@@ -1722,5 +1720,7 @@ final class StreamHandler {
     void dispose() {
         retries.clear();
         lastLinkCodeKey.set(null);
+        dispatcher.shutdownNow();
+        dispatcher.close();
     }
 }
