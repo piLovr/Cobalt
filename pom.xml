@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.github.pilovr</groupId>
+    <parent>
+        <groupId>com.github.pilovr</groupId>
+        <artifactId>mintopi-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
     <artifactId>cobalt</artifactId>
-    <version>0.0.11</version>
-    <name>${project.groupId}:${project.artifactId}</name>
+    <version>0.0.11-SNAPSHOT</version>
+    <name>cobalt</name>
     <description>Standalone fully-featured WhatsApp Web API for Java and Kotlin</description>
     <url>https://github.com/Auties00/Cobalt</url>
 
