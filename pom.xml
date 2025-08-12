@@ -208,7 +208,7 @@
             <version>${apk.parser.version}</version>
         </dependency>
 
-        <!-- Generate message previews -->
+        <!-- Generate extendedMessage previews -->
         <dependency>
             <groupId>com.github.auties00</groupId>
             <artifactId>link-preview</artifactId>

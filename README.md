@@ -259,9 +259,9 @@ Finally, if you want to pause the current thread until the connection is closed,
   Whatsapp.webBuilder() // Use the Web api
         .newConnection() // Create a new connection
         .unregistered(QrHandler.toTerminal()) // Print the QR to the terminal
-        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a message when connected
-        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a message when disconnected
-        .addNewChatMessageListener(message -> System.out.printf("New message: %s%n", message.toJson())) // Print a message when a new chat message arrives
+        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a extendedMessage when connected
+        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a extendedMessage when disconnected
+        .addNewChatMessageListener(extendedMessage -> System.out.printf("New extendedMessage: %s%n", extendedMessage.toJson())) // Print a extendedMessage when a new chat extendedMessage arrives
         .connect() // Connect to Whatsapp asynchronously
         .join() // Await the result
         .awaitDisconnection(); // Wait 
@@ -278,9 +278,9 @@ var phoneNumber = scanner.nextLong();
   Whatsapp.webBuilder() // Use the Web api
         .newConnection() // Create a new connection
         .unregistered(phoneNumber, PairingCodeHandler.toTerminal()) // Print the pairing code to the terminal
-        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a message when connected
-        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a message when disconnected
-        .addNewChatMessageListener(message -> System.out.printf("New message: %s%n", message.toJson())) // Print a message when a new chat message arrives
+        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a extendedMessage when connected
+        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a extendedMessage when disconnected
+        .addNewChatMessageListener(extendedMessage -> System.out.printf("New extendedMessage: %s%n", extendedMessage.toJson())) // Print a extendedMessage when a new chat extendedMessage arrives
         .connect() // Connect to Whatsapp asynchronously
         .join() // Await the result
         .awaitDisconnection(); // Wait 
@@ -307,9 +307,9 @@ var scanner = new Scanner(System.in);
                 .register(phoneNumber) // Register the phone number asynchronously, if necessary
         .join() // Await the result
         .whatsapp() // Access the Whatsapp instance
-        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a message when connected
-        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a message when disconnected
-        .addNewChatMessageListener(message -> System.out.printf("New message: %s%n", message.toJson())) // Print a message when a new chat message arrives
+        .addLoggedInListener(api -> System.out.printf("Connected: %s%n", api.store().privacySettings())) // Print a extendedMessage when connected
+        .addDisconnectedListener(reason -> System.out.printf("Disconnected: %s%n", reason)) // Print a extendedMessage when disconnected
+        .addNewChatMessageListener(extendedMessage -> System.out.printf("New extendedMessage: %s%n", extendedMessage.toJson())) // Print a extendedMessage when a new chat extendedMessage arrives
         .connect() // Connect to Whatsapp asynchronously
         .join() // Await the result
         .awaitDisconnection(); // Wait 
@@ -484,9 +484,9 @@ Data can also be easily queried by using these methods:
       ```java
       var chat = store.findChatByName(name);
       ```  
-    - Query a chat by a message inside it
+    - Query a chat by a extendedMessage inside it
       ```java
-      var chat = store.findChatByMessage(message);
+      var chat = store.findChatByMessage(extendedMessage);
       ```   
     - Query all chats that match a name
       ```java
@@ -539,7 +539,7 @@ please check the javadocs if this is what you need.
 
 ### How to send messages
 
-To send a message, start by finding the chat where the message should be sent. Here is an example:
+To send a extendedMessage, start by finding the chat where the extendedMessage should be sent. Here is an example:
 
 ```java
 var chat = api.store()
@@ -555,43 +555,43 @@ All types of messages supported by Whatsapp are supported by this library:
 - Text
 
     ```java
-    api.sendMessage(chat,  "This is a text message!");
+    api.sendMessage(chat,  "This is a text extendedMessage!");
     ```
 
 - Complex text
 
     ```java
-    var message = new TextMessageBuilder() // Create a new text message
-            .text("Check this video out: https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the text of the message
-            .canonicalUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the url of the message
-            .matchedText("https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the matched text for the url in the message
+    var extendedMessage = new TextMessageBuilder() // Create a new text extendedMessage
+            .text("Check this video out: https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the text of the extendedMessage
+            .canonicalUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the url of the extendedMessage
+            .matchedText("https://www.youtube.com/watch?v=dQw4w9WgXcQ") // Set the matched text for the url in the extendedMessage
             .title("A nice suprise") // Set the title of the url
             .description("Check me out") // Set the description of the url
-            .build(); // Create the message
-    api.sendMessage(chat,  message); 
+            .build(); // Create the extendedMessage
+    api.sendMessage(chat,  extendedMessage); 
     ```
 
 - Location
 
     ```java
-    var location = new LocationMessageBuilder() // Create a new location message
-            .caption("Look at this!") // Set the caption of the message, that is the text below the file
+    var location = new LocationMessageBuilder() // Create a new location extendedMessage
+            .caption("Look at this!") // Set the caption of the extendedMessage, that is the text below the file
             .latitude(38.9193) // Set the longitude of the location to share
             .longitude(1183.1389) // Set the latitude of the location to share
-            .build(); // Create the message
+            .build(); // Create the extendedMessage
     api.sendMessage(chat, location);
     ```
 
 - Live location
 
     ```java
-    var location = new LiveLocationMessageBuilder() // Create a new live location message
-            .caption("Look at this!") // Set the caption of the message, that is the text below the file. Not available if this message is live
+    var location = new LiveLocationMessageBuilder() // Create a new live location extendedMessage
+            .caption("Look at this!") // Set the caption of the extendedMessage, that is the text below the file. Not available if this extendedMessage is live
             .latitude(38.9193) // Set the longitude of the location to share
             .longitude(1183.1389) // Set the latitude of the location to share
             .accuracy(10) // Set the accuracy of the location in meters
             .speed(12) // Set the speed of the device sharing the location in meter per endTimeStamp
-            .build(); // Create the message
+            .build(); // Create the extendedMessage
     api.sendMessage(chat, location);
     ```
   > **_IMPORTANT:_** Live location updates are not supported by Whatsapp multi-device. No ETA has been given for a fix.
@@ -603,13 +603,13 @@ All types of messages supported by Whatsapp are supported by this library:
             .filter(Chat::isGroup)
             .orElseThrow(() -> new NoSuchElementException("Hey, you don't exist"));
     var inviteCode = api.queryGroupInviteCode(group).join();
-    var groupInvite = new GroupInviteMessageBuilder() // Create a new group invite message
-            .caption("Come join my group of fellow programmers") // Set the caption of this message
+    var groupInvite = new GroupInviteMessageBuilder() // Create a new group invite extendedMessage
+            .caption("Come join my group of fellow programmers") // Set the caption of this extendedMessage
             .name(group.name()) // Set the name of the group
             .groupJid(group.jid())) // Set the jid of the group
             .inviteExpiration(ZonedDateTime.now().plusDays(3).toEpochSecond()) // Set the expiration of this invite
             .inviteCode(inviteCode) // Set the code of the group
-            .build(); // Create the message
+            .build(); // Create the extendedMessage
     api.sendMessage(chat, groupInvite); 
     ```
 
@@ -619,20 +619,20 @@ All types of messages supported by Whatsapp are supported by this library:
             .name("A nice friend") // Set the name of the contact
             .phoneNumber(contact) // Set the phone number of the contact
             .build(); // Create the vcard
-    var contactMessage = new ContactMessageBuilder()  // Create a new contact message
+    var contactMessage = new ContactMessageBuilder()  // Create a new contact extendedMessage
             .name("A nice friend") // Set the display name of the contact
             .vcard(vcard) // Set the vcard(https://en.wikipedia.org/wiki/VCard) of the contact
-            .build(); // Create the message
+            .build(); // Create the extendedMessage
     api.sendMessage(chat, contactMessage);
     ```
 
 - Contact array
 
     ```java
-    var contactsMessage = new ContactsArrayMessageBuilder()  // Create a new contacts array message
-            .name("A nice friend") // Set the display name of the first contact that this message contains
-            .contacts(List.of(jack,lucy,jeff)) // Set a list of contact messages that this message wraps
-            .build(); // Create the message
+    var contactsMessage = new ContactsArrayMessageBuilder()  // Create a new contacts array extendedMessage
+            .name("A nice friend") // Set the display name of the first contact that this extendedMessage contains
+            .contacts(List.of(jack,lucy,jeff)) // Set a list of contact messages that this extendedMessage wraps
+            .build(); // Create the extendedMessage
     api.sendMessage(chat, contactsMessage);
     ```
 
@@ -662,43 +662,43 @@ All types of messages supported by Whatsapp are supported by this library:
     - Image
 
       ```java
-      var image = new ImageMessageSimpleBuilder() // Create a new image message builder
-            .media(media) // Set the image of this message
-            .caption("A nice image") // Set the caption of this message
-            .build(); // Create the message
+      var image = new ImageMessageSimpleBuilder() // Create a new image extendedMessage builder
+            .media(media) // Set the image of this extendedMessage
+            .caption("A nice image") // Set the caption of this extendedMessage
+            .build(); // Create the extendedMessage
       api.sendMessage(chat,  image);
       ```
 
     - Audio or voice
 
       ```java
-       var audio = new AudioMessageSimpleBuilder() // Create a new audio message builder
-             .media(urlMedia) // Set the audio of this message
-             .voiceMessage(false) // Set whether this message is a voice message
-             .build(); // Create the message
+       var audio = new AudioMessageSimpleBuilder() // Create a new audio extendedMessage builder
+             .media(urlMedia) // Set the audio of this extendedMessage
+             .voiceMessage(false) // Set whether this extendedMessage is a voice extendedMessage
+             .build(); // Create the extendedMessage
        api.sendMessage(chat,  audio);
       ```
 
     -  Video
 
        ```java
-       var video = new VideoMessageSimpleBuilder() // Create a new video message builder
-             .media(urlMedia) // Set the video of this message
-             .caption("A nice video") // Set the caption of this message
+       var video = new VideoMessageSimpleBuilder() // Create a new video extendedMessage builder
+             .media(urlMedia) // Set the video of this extendedMessage
+             .caption("A nice video") // Set the caption of this extendedMessage
              .width(100) // Set the width of the video
              .height(100) // Set the height of the video
-             .build(); // Create the message
+             .build(); // Create the extendedMessage
        api.sendMessage(chat,  video); 
        ```
 
     -  GIF(Video)
 
        ```java
-       var gif = new GifMessageSimpleBuilder() // Create a new gif message builder
-             .media(urlMedia) // Set the gif of this message
-             .caption("A nice gif") // Set the caption of this message
+       var gif = new GifMessageSimpleBuilder() // Create a new gif extendedMessage builder
+             .media(urlMedia) // Set the gif of this extendedMessage
+             .caption("A nice gif") // Set the caption of this extendedMessage
              .gifAttribution(VideoMessageAttribution.TENOR) // Set the source of the gif
-             .build(); // Create the message
+             .build(); // Create the extendedMessage
        api.sendMessage(chat,  gif);
        ```
        > **_IMPORTANT:_** Whatsapp doesn't support conventional gifs. Instead, videos can be played as gifs if particular attributes are set. Sending a conventional gif will result in an exception if detected or in undefined behaviour.
@@ -706,12 +706,12 @@ All types of messages supported by Whatsapp are supported by this library:
     -  Document
 
        ```java
-       var document = new DocumentMessageSimpleBuilder() // Create a new document message builder
-             .media(urlMedia) // Set the document of this message
+       var document = new DocumentMessageSimpleBuilder() // Create a new document extendedMessage builder
+             .media(urlMedia) // Set the document of this extendedMessage
              .title("A nice pdf") // Set the title of the document
              .fileName("pdf-test.pdf") // Set the name of the document
              .pageCount(1) // Set the number of pages of the document
-             .build(); // Create the message
+             .build(); // Create the extendedMessage
        api.sendMessage(chat,  document);
        ```
 - Reaction
@@ -719,14 +719,14 @@ All types of messages supported by Whatsapp are supported by this library:
     - Send a reaction
 
     ```java
-    var someMessage = ...; // The message to react to
+    var someMessage = ...; // The extendedMessage to react to
     api.sendReaction(someMessage, Emoji.RED_HEART); // Use the Emoji class for a list of all Emojis
     ```
 
     - Remove a reaction
 
     ```java
-    var someMessage = ...; // The message to react to
+    var someMessage = ...; // The extendedMessage to react to
     api.removeReaction(someMessage); // Use the Emoji class for a list of all Emojis
     ```
 
@@ -742,7 +742,7 @@ You can also register a listener, but in many cases the async/await paradigm is 
 ### How to delete messages
 
 ``` java
-var result = api.delete(someMessage, everyone); // Deletes a message for yourself or everyone
+var result = api.delete(someMessage, everyone); // Deletes a extendedMessage for yourself or everyone
 ```
 
 ### How to change your status
@@ -783,9 +783,9 @@ If the returned value is an empty Optional, the last status of the contact is un
 
 Whatsapp starts sending updates regarding the presence of a contact only when:
 
-- A message was recently exchanged between you and said contact
-- A new message arrives from said contact
-- You send a message to said contact
+- A extendedMessage was recently exchanged between you and said contact
+- A new extendedMessage arrives from said contact
+- You send a extendedMessage to said contact
 
 To force Whatsapp to send these updates use:
 
@@ -825,8 +825,8 @@ var metadata = api.queryGroupMetadata(group); // A completable future
 
 ``` java
 var messages = chat.messages(); // All the messages in a chat
-var firstMessage = chat.firstMessage(); // First message in a chat chronologically
-var lastMessage = chat.lastMessage(); // Last message in a chat chronologically 
+var firstMessage = chat.firstMessage(); // First extendedMessage in a chat chronologically
+var lastMessage = chat.lastMessage(); // Last extendedMessage in a chat chronologically 
 var starredMessages = chat.starredMessages(); // All the starred messages in a chat
 ```
 
@@ -856,7 +856,7 @@ var future = api.archiveChat(chat);
 var future = api.unarchiveChat(chat);
 ```
 
-##### Change ephemeral message status in a chat
+##### Change ephemeral extendedMessage status in a chat
 
 ``` java
 var future = api.changeEphemeralTimer(chat,  ChatEphemeralTimer.ONE_WEEK);
@@ -1132,7 +1132,7 @@ var future = api.stopCall(contact);
     var future = api.queryNewsletterSubscribers(newsletterJid);
     ```
     
--   **Invite newsletter admins:** (Sends an invite message to the user)
+-   **Invite newsletter admins:** (Sends an invite extendedMessage to the user)
     ```java
     var future = api.inviteNewsletterAdmins(newsletterJid, "Join as admin!", adminJid1, adminJid2);
     ```
@@ -1153,17 +1153,17 @@ var future = api.stopCall(contact);
     var future = api.queryNewsletter(newsletterJid, NewsletterViewerRole.SUBSCRIBER);
     ```
     
--   **Send newsletter message:**
+-   **Send newsletter extendedMessage:**
     ```java
-    var future = api.sendNewsletterMessage(newsletterJid, message);
+    var future = api.sendNewsletterMessage(newsletterJid, extendedMessage);
     ```
     
--   **Edit newsletter message:**
+-   **Edit newsletter extendedMessage:**
     ```java
     var future = api.editMessage(oldMessage, newContent);
     ```
     
--   **Delete newsletter message:**
+-   **Delete newsletter extendedMessage:**
     ```java
     var future = api.deleteMessage(messageToDelete);
     
