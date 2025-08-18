@@ -1,15 +1,19 @@
 package it.auties.whatsapp.socket;
 
+import it.auties.curve25519.Curve25519;
 import it.auties.whatsapp.api.*;
 import it.auties.whatsapp.api.WhatsappErrorHandler.Location;
+import it.auties.whatsapp.api.WhatsappVerificationHandler.Web.PairingCode;
 import it.auties.whatsapp.controller.Keys;
 import it.auties.whatsapp.controller.Store;
-import it.auties.whatsapp.io.BinaryNodeDecoder;
+import it.auties.whatsapp.crypto.PairingCodeSession;
+import it.auties.whatsapp.socket.io.NodeDecoder;
 import it.auties.whatsapp.model.action.Action;
-import it.auties.whatsapp.model.business.BusinessCategory;
+import it.auties.whatsapp.model.business.*;
 import it.auties.whatsapp.model.call.Call;
 import it.auties.whatsapp.model.chat.*;
 import it.auties.whatsapp.model.contact.Contact;
+import it.auties.whatsapp.model.contact.ContactBuilder;
 import it.auties.whatsapp.model.contact.ContactStatus;
 import it.auties.whatsapp.model.info.ChatMessageInfo;
 import it.auties.whatsapp.model.info.MessageIndexInfo;
@@ -23,16 +27,24 @@ import it.auties.whatsapp.model.newsletter.NewsletterViewerRole;
 import it.auties.whatsapp.model.node.Attributes;
 import it.auties.whatsapp.model.node.Node;
 import it.auties.whatsapp.model.privacy.PrivacySettingEntry;
+import it.auties.whatsapp.model.privacy.PrivacySettingEntryBuilder;
+import it.auties.whatsapp.model.privacy.PrivacySettingType;
+import it.auties.whatsapp.model.privacy.PrivacySettingValue;
 import it.auties.whatsapp.model.request.CommunityRequests;
 import it.auties.whatsapp.model.request.MessageRequest;
 import it.auties.whatsapp.model.request.NewsletterRequests;
 import it.auties.whatsapp.model.response.CommunityLinkedGroupsResponse;
 import it.auties.whatsapp.model.response.NewsletterResponse;
+import it.auties.whatsapp.model.response.SubscribedNewslettersResponse;
 import it.auties.whatsapp.model.response.UserAboutResponse;
 import it.auties.whatsapp.model.setting.Setting;
+import it.auties.whatsapp.model.signal.keypair.SignalPreKeyPair;
 import it.auties.whatsapp.model.sync.PatchRequest;
 import it.auties.whatsapp.model.sync.PatchType;
 import it.auties.whatsapp.model.sync.PrimaryFeature;
+import it.auties.whatsapp.socket.message.MessageComponent;
+import it.auties.whatsapp.socket.state.AppStateComponent;
+import it.auties.whatsapp.socket.stream.StreamComponent;
 import it.auties.whatsapp.util.Bytes;
 import it.auties.whatsapp.util.Clock;
 import it.auties.whatsapp.util.Streams;
@@ -49,161 +61,51 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static it.auties.whatsapp.api.WhatsappErrorHandler.Location.*;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public final class SocketHandler {
+public final class SocketConnection {
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
+    private static final int DEFAULT_NEWSLETTER_MESSAGES = 100;
+    private static final byte[] KEY_BUNDLE_TYPE = new byte[]{5};
 
     private SocketSession session;
     private final Whatsapp whatsapp;
-    private final EncryptionHandler encryptionHandler;
-    private final StreamHandler streamHandler;
-    private final MessageHandler messageHandler;
-    private final AppStateHandler appStateHandler;
+    private final SocketEncryption socketEncryption;
+    private final StreamComponent streamComponent;
+    private final MessageComponent messageComponent;
+    private final AppStateComponent appStateHandler;
+    private final WhatsappVerificationHandler.Web webVerificationHandler;
     private final WhatsappErrorHandler errorHandler;
     private volatile ScheduledExecutorService scheduler;
     private final ConcurrentHashMap<String, Request> pendingRequests;
-    private final ConcurrentMap<Jid, SequencedSet<ChatPastParticipant>> pastParticipants;
     private final ConcurrentMap<String, CompletableFuture<MessageInfo>> pendingMessages;
-    private final Map<Jid, ChatMetadata> chatMetadataCache;
+    private final Map<Jid, GroupOrCommunityMetadata> chatMetadataCache;
     private final AtomicBoolean serializable;
     private final AtomicReference<State> state;
+    private final PairingCodeSession pairingCodeSession;
     private final Keys keys;
     private final Store store;
     private Thread shutdownHook;
 
-    public SocketHandler(Whatsapp whatsapp, Store store, Keys keys, WhatsappErrorHandler errorHandler, WhatsappVerificationHandler.Web webVerificationHandler) {
+    public SocketConnection(Whatsapp whatsapp, Store store, Keys keys, WhatsappErrorHandler errorHandler, WhatsappVerificationHandler.Web webVerificationHandler) {
         this.whatsapp = whatsapp;
         this.store = store;
         this.keys = keys;
         this.state = new AtomicReference<>(State.DISCONNECTED);
         this.serializable = new AtomicBoolean(true);
-        this.encryptionHandler = new EncryptionHandler(this);
-        this.streamHandler = new StreamHandler(this, webVerificationHandler);
-        this.messageHandler = new MessageHandler(this);
-        this.appStateHandler = new AppStateHandler(this);
+        this.socketEncryption = new SocketEncryption(this);
+        this.streamComponent = new StreamComponent(this);
+        this.messageComponent = new MessageComponent(this);
+        this.appStateHandler = new AppStateComponent(this);
+        this.webVerificationHandler = webVerificationHandler;
         this.errorHandler = errorHandler;
-        this.pastParticipants = new ConcurrentHashMap<>();
         this.chatMetadataCache = new ConcurrentHashMap<>();
         this.pendingRequests = new ConcurrentHashMap<>();
         this.pendingMessages = new ConcurrentHashMap<>();
-    }
-
-    private void onShutdown() {
-        if (!serializable.getAcquire()) {
-            keys.dispose();
-            store.dispose();
-        }
-
-        if (scheduler != null) {
-            scheduler.shutdownNow();
-            this.scheduler = null;
-        }
-
-        dispose();
-    }
-
-    private void callListenersAsync(Consumer<WhatsappListener> consumer) {
-        for (var listener : store.listeners()) {
-            Thread.startVirtualThread(() -> invokeListenerSafe(consumer, listener));
-        }
-    }
-
-    public void onMessage(ByteBuffer message) {
-        switch (state.getAcquire()) {
-            case HANDSHAKING -> handleHandshake(message);
-            case CONNECTED -> handleMessage(message);
-            case DISCONNECTED -> {}
-        }
-    }
-
-    private void handleMessage(ByteBuffer message)  {
-        try {
-            message = encryptionHandler.receiveDeciphered(message);
-        }catch (Throwable throwable) {
-            handleFailure(CRYPTOGRAPHY, throwable);
-            return;
-        }
-
-        try (var stream = Streams.newInputStream(message)) {
-            while (stream.available() > 0) {
-                var node = BinaryNodeDecoder.decode(stream);
-                onNodeReceived(node);
-                resolvePendingRequest(node);
-                streamHandler.digest(node);
-            }
-        } catch (Throwable throwable) {
-            handleFailure(STREAM, throwable);
-        }
-    }
-
-    private void decodeNodes(ByteBuffer output) {
-        try (var stream = Streams.newInputStream(output)) {
-            while (stream.available() > 0) {
-                var node = BinaryNodeDecoder.decode(stream);
-                onNodeReceived(node);
-                resolvePendingRequest(node);
-                streamHandler.digest(node);
-            }
-        }catch (Throwable throwable) {
-            handleFailure(STREAM, throwable);
-        }
-
-    }
-
-    private void handleHandshake(ByteBuffer message)  {
-        try {
-            encryptionHandler.finishHandshake(message);
-            state.compareAndSet(State.HANDSHAKING, State.CONNECTED);
-        } catch (Throwable throwable) {
-            handleFailure(LOGIN, throwable);
-        }
-    }
-
-    private void onNodeReceived(Node node) {
-        callListenersAsync(listener -> {
-            listener.onNodeReceived(whatsapp, node);
-            listener.onNodeReceived(node);
-        });
-    }
-
-    public void sendNodeWithNoResponse(Node node) {
-        if(encryptionHandler.sendCiphered(node)) {
-            onNodeSent(node);
-        }
-    }
-
-    public Node sendNode(Node node) {
-        return sendNode(node, null);
-    }
-
-    public Node sendNode(Node node, Function<Node, Boolean> filter) {
-        if (node.id() == null) {
-            node.attributes().put("id", Bytes.randomHex(10));
-        }
-
-        if(!encryptionHandler.sendCiphered(node)) {
-            return Node.empty();
-        }
-
-        onNodeSent(node);
-        var request = new Request(node, filter);
-        pendingRequests.put(node.id(), request);
-        try {
-            return request.waitForResponse();
-        }catch (Throwable ignored) {
-            return Node.empty();
-        }
-    }
-
-    public void sendBinary(byte[] binary) {
-        if (state.getAcquire() == State.DISCONNECTED) {
-            throw new IllegalStateException("Instance is not connected");
-        }
-
-        session.sendBinary(binary);
+        this.pairingCodeSession = webVerificationHandler instanceof PairingCode ? new PairingCodeSession() : null;
     }
 
     public void connect(WhatsappDisconnectReason reason)  {
@@ -215,10 +117,13 @@ public final class SocketHandler {
             this.session = SocketSession.of(store.proxy().orElse(null));
             session.connect(this::onMessage);
         } catch (Throwable throwable) {
-            state.set(State.DISCONNECTED);
             if (reason == WhatsappDisconnectReason.RECONNECTING) {
+                state.set(State.DISCONNECTED);
                 handleFailure(RECONNECT, throwable);
+            }else {
+                handleFailure(LOGIN, throwable);
             }
+            return;
         }
 
         if (shutdownHook == null) {
@@ -228,11 +133,11 @@ public final class SocketHandler {
             Runtime.getRuntime().addShutdownHook(shutdownHook);
         }
 
-        encryptionHandler.startHandshake(keys.ephemeralKeyPair().publicKey());
+        socketEncryption.startHandshake(keys.ephemeralKeyPair().publicKey());
     }
 
     public void disconnect(WhatsappDisconnectReason reason)  {
-        if(!state.compareAndSet(State.CONNECTED, State.DISCONNECTED)) {
+        if(state.getAndSet(State.DISCONNECTED) == State.DISCONNECTED) {
             return;
         }
 
@@ -240,11 +145,7 @@ public final class SocketHandler {
             session.disconnect();
         }
 
-        onDisconnected(reason);
-    }
-
-    private void onDisconnected(WhatsappDisconnectReason reason) {
-        encryptionHandler.reset();
+        socketEncryption.reset();
         pendingRequests.forEach((ignored, request) -> request.complete(Node.empty()));
         pendingRequests.clear();
         if (reason == WhatsappDisconnectReason.LOGGED_OUT || reason == WhatsappDisconnectReason.BANNED) {
@@ -267,8 +168,104 @@ public final class SocketHandler {
         }
     }
 
+    private void onShutdown() {
+        if (!serializable.getAcquire()) {
+            keys.dispose();
+            store.dispose();
+        }
+
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+            this.scheduler = null;
+        }
+
+        dispose();
+    }
+
+    public void onMessage(ByteBuffer message) {
+        switch (state.getAcquire()) {
+            case HANDSHAKING -> handleHandshake(message);
+            case CONNECTED -> handleMessage(message);
+            case DISCONNECTED -> {}
+        }
+    }
+
+    private void handleHandshake(ByteBuffer message)  {
+        try {
+            socketEncryption.finishHandshake(message);
+            state.compareAndSet(State.HANDSHAKING, State.CONNECTED);
+        } catch (Throwable throwable) {
+            handleFailure(LOGIN, throwable);
+        }
+    }
+
+    private void handleMessage(ByteBuffer message)  {
+        try {
+            message = socketEncryption.receiveDeciphered(message);
+        }catch (Throwable throwable) {
+            handleFailure(CRYPTOGRAPHY, throwable);
+            return;
+        }
+
+        try (var stream = Streams.newInputStream(message)) {
+            while (stream.available() > 0) {
+                var node = NodeDecoder.decode(stream);
+                onNodeReceived(node);
+                resolvePendingRequest(node);
+                streamComponent.digest(node);
+            }
+        }catch (Throwable throwable) {
+            handleFailure(STREAM, throwable);
+        }
+    }
+
+    private void onNodeReceived(Node node) {
+        callListenersAsync(listener -> {
+            listener.onNodeReceived(whatsapp, node);
+            listener.onNodeReceived(node);
+        });
+    }
+
+    public void sendNodeWithNoResponse(Node node) {
+        if(socketEncryption.sendCiphered(node)) {
+            onNodeSent(node);
+        }
+    }
+
+    public Node sendNode(Node node) {
+        return sendNode(node, null);
+    }
+
+    public Node sendNode(Node node, Function<Node, Boolean> filter) {
+        if (node.id() == null) {
+            node.attributes().put("id", Bytes.randomHex(10));
+        }
+
+        if(!socketEncryption.sendCiphered(node)) {
+            return Node.empty();
+        }
+
+        onNodeSent(node);
+        var request = new Request(node, filter);
+        pendingRequests.put(node.id(), request);
+        try {
+            return request.waitForResponse();
+        }catch (Throwable ignored) {
+            return Node.empty();
+        }
+    }
+
+    public void sendBinary(byte[] binary) {
+        if (state.getAcquire() == State.DISCONNECTED) {
+            throw new IllegalStateException("Instance is not connected");
+        }
+
+        session.sendBinary(ByteBuffer.wrap(binary));
+    }
+
     public void pushPatch(PatchRequest request) {
-        var jid = store.jid().orElseThrow(() -> new IllegalStateException("The session isn't connected"));
+        var jid = store.jid()
+                .orElseThrow(() -> new IllegalStateException("The session isn't connected"));
         appStateHandler.push(jid, List.of(request));
     }
 
@@ -276,21 +273,21 @@ public final class SocketHandler {
         appStateHandler.pull(patchTypes);
     }
 
-    void pullInitialPatches() {
+    public void pullInitialPatches() {
         appStateHandler.pullInitial();
     }
 
     public void decodeMessage(Node node, JidProvider chatOverride, boolean notify) {
-        messageHandler.decode(node, chatOverride, notify);
+        messageComponent.decode(node, chatOverride, notify);
     }
 
     public void sendMessage(MessageRequest request) {
-        messageHandler.encode(request);
+        messageComponent.encode(request);
     }
 
     @SuppressWarnings("UnusedReturnValue")
     public void sendQueryWithNoResponse(String method, String category, Node... body) {
-        sendQueryWithNoResponse(null, JidServer.whatsapp().toJid(), method, category, null, body);
+        sendQueryWithNoResponse(null, JidServer.user().toJid(), method, category, null, body);
     }
 
     public void sendQueryWithNoResponse(String id, Jid to, String method, String category, Map<String, Object> metadata, Node... body) {
@@ -301,6 +298,12 @@ public final class SocketHandler {
                 .put("xmlns", category, Objects::nonNull)
                 .toMap();
         sendNodeWithNoResponse(Node.of("iq", attributes, body));
+    }
+
+    private void callListenersAsync(Consumer<WhatsappListener> consumer) {
+        for (var listener : store.listeners()) {
+            Thread.startVirtualThread(() -> invokeListenerSafe(consumer, listener));
+        }
     }
 
     private void onNodeSent(Node node) {
@@ -353,7 +356,7 @@ public final class SocketHandler {
     }
 
     public Node sendQuery(String method, String category, Node... body) {
-        return sendQuery(null, JidServer.whatsapp().toJid(), method, category, null, body);
+        return sendQuery(null, JidServer.user().toJid(), method, category, null, body);
     }
 
     public Node sendQuery(String id, Jid to, String method, String category, Map<String, Object> metadata, Node... body) {
@@ -369,7 +372,7 @@ public final class SocketHandler {
     public Optional<URI> queryPicture(JidProvider chat) {
         var body = Node.of("picture", Map.of("query", "url", "type", "image"));
         var community = chat.toJid().hasServer(JidServer.groupOrCommunity())
-                && queryGroupMetadata(chat.toJid()).isCommunity();
+                && queryGroupOrCommunityMetadata(chat.toJid()).isCommunity();
         return sendQuery("get", "w:profile:picture", Map.of(community ? "parent_group_jid" : "target", chat.toJid()), body)
                 .findChild("picture")
                 .flatMap(picture -> picture.attributes().getOptionalString("url"))
@@ -377,7 +380,7 @@ public final class SocketHandler {
     }
 
     public Node sendQuery(String method, String category, Map<String, Object> metadata, Node... body) {
-        return sendQuery(null, JidServer.whatsapp().toJid(), method, category, metadata, body);
+        return sendQuery(null, JidServer.user().toJid(), method, category, metadata, body);
     }
 
     public List<Jid> queryBlockList() {
@@ -420,20 +423,75 @@ public final class SocketHandler {
                 .forEach(messages -> decodeMessage(messages, newsletter, false));
     }
 
-    public ChatMetadata queryGroupMetadata(JidProvider group) {
-        var metadata = chatMetadataCache.get(group.toJid());
+    public Optional<GroupOrCommunityMetadata> getChatMetadata(JidProvider chat) {
+        return Optional.ofNullable(chatMetadataCache.get(chat.toJid()));
+    }
+
+    public GroupOrCommunityMetadata queryGroupOrCommunityMetadata(JidProvider chat) {
+        var metadata = chatMetadataCache.get(chat.toJid());
         if (metadata != null) {
             return metadata;
         }
 
         var body = Node.of("query", Map.of("request", "interactive"));
-        var response = sendQuery(group.toJid(), "get", "w:g2", body);
+        var response = sendQuery(chat.toJid(), "get", "w:g2", body);
         var result = handleGroupMetadata(response);
-        chatMetadataCache.put(group.toJid(), result);
+        chatMetadataCache.put(chat.toJid(), result);
         return result;
     }
 
-    public ChatMetadata handleGroupMetadata(Node response) {
+    public void queryNewsletters() {
+        try {
+            var request = NewsletterRequests.subscribedNewsletters();
+            var result = sendQuery("get", "w:mex", Node.of("query", Map.of("query_id", "6388546374527196"), request));
+            if (!store().webHistorySetting().hasNewsletters()) {
+                return;
+            }
+
+            var newslettersPayload = result.findChild("result")
+                    .flatMap(Node::contentAsString);
+            if (newslettersPayload.isEmpty()) {
+                return;
+            }
+
+            SubscribedNewslettersResponse.ofJson(newslettersPayload.get()).ifPresent(response -> {
+                var noMessages = store().webHistorySetting().isZero();
+                var data = response.newsletters();
+                for (var newsletter : data) {
+                    store().addNewsletter(newsletter);
+                    if (!noMessages) {
+                        try {
+                            queryNewsletterMessages(newsletter, DEFAULT_NEWSLETTER_MESSAGES);
+                        } catch (Throwable throwable) {
+                            handleFailure(MESSAGE, throwable);
+                        }
+                    }
+                }
+
+                onNewsletters();
+            });
+        }catch (Throwable throwable) {
+            handleFailure(HISTORY_SYNC, throwable);
+        }
+    }
+
+    public void queryGroups() {
+        try {
+            var result = sendQuery(JidServer.groupOrCommunity().toJid(), "get", "w:g2", Node.of("participating", Node.of("participants"), Node.of("description")));
+            var groups = result.findChild("groups");
+            if (groups.isEmpty()) {
+                return;
+            }
+
+            groups.get()
+                    .listChildren("group")
+                    .forEach(this::handleGroupMetadata);
+        }catch (Throwable throwable) {
+            handleFailure(HISTORY_SYNC, throwable);
+        }
+    }
+
+    public GroupOrCommunityMetadata handleGroupMetadata(Node response) {
         var metadataNode = Optional.of(response)
                 .filter(entry -> entry.hasDescription("group"))
                 .or(() -> response.findChild("group"))
@@ -445,7 +503,7 @@ public final class SocketHandler {
         return metadata;
     }
 
-    private ChatMetadata parseGroupMetadata(Node node) {
+    private GroupOrCommunityMetadata parseGroupMetadata(Node node) {
         var groupId = node.attributes()
                 .getOptionalString("id")
                 .map(id -> Jid.of(id, JidServer.groupOrCommunity()))
@@ -478,7 +536,6 @@ public final class SocketHandler {
         var communityNode = node.findChild("parent")
                 .orElse(null);
         var policies = new HashMap<Integer, ChatSettingPolicy>();
-        var pastParticipants = Objects.requireNonNullElseGet(this.pastParticipants.get(groupId), LinkedHashSet<ChatPastParticipant>::new);
         if (communityNode == null) {
             policies.put(GroupSetting.EDIT_GROUP_INFO.index(), ChatSettingPolicy.of(node.hasNode("announce")));
             policies.put(GroupSetting.SEND_MESSAGES.index(), ChatSettingPolicy.of(node.hasNode("restrict")));
@@ -496,7 +553,7 @@ public final class SocketHandler {
                     .map(this::parseGroupParticipant)
                     .flatMap(Optional::stream)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
-            return new ChatMetadataBuilder()
+            return new GroupOrCommunityMetadataBuilder()
                     .jid(groupId)
                     .subject(subject)
                     .subjectAuthorJid(subjectAuthor)
@@ -507,7 +564,6 @@ public final class SocketHandler {
                     .descriptionId(descriptionId)
                     .settings(policies)
                     .participants(participants)
-                    .pastParticipants(pastParticipants)
                     .ephemeralExpirationSeconds(ephemeral)
                     .isCommunity(false)
                     .build();
@@ -527,7 +583,7 @@ public final class SocketHandler {
             var request = CommunityRequests.linkedGroups(groupId, "INTERACTIVE");
             var communityResponse = sendQuery("get", "w:mex", Node.of("query", Map.of("query_id", "7353258338095347"), request));
             var linkedGroups = parseLinkedGroups(communityResponse);
-            return new ChatMetadataBuilder()
+            return new GroupOrCommunityMetadataBuilder()
                     .jid(groupId)
                     .subject(subject)
                     .subjectAuthorJid(subjectAuthor)
@@ -538,7 +594,6 @@ public final class SocketHandler {
                     .descriptionId(descriptionId)
                     .settings(policies)
                     .participants(participants)
-                    .pastParticipants(pastParticipants)
                     .ephemeralExpirationSeconds(ephemeral)
                     .isCommunity(true)
                     .communityGroups(linkedGroups)
@@ -578,27 +633,14 @@ public final class SocketHandler {
         return sendQuery(null, to, method, category, null, body);
     }
 
-    public void sendRetryReceipt(long nodeTimestamp, Jid chatJid, Jid participantJid, String messageId) {
-        var retryAttributes = Attributes.of()
-                .put("count", 1)
-                .put("id", messageId)
-                .put("t", nodeTimestamp)
-                .put("v", 1)
-                .toMap();
-        var retryNode = Node.of("retry", retryAttributes);
-        var registrationNode = Node.of("registration", keys.encodedRegistrationId());
-        var receiptAttributes = Attributes.of()
-                .put("id", messageId)
-                .put("type", "retry")
-                .put("to", chatJid.withAgent(0))
-                .put("participant", participantJid == null ? null : participantJid.withAgent(0), participantJid != null)
-                .toMap();
-        var receipt = Node.of("receipt", receiptAttributes, retryNode, registrationNode);
-        sendNodeWithNoResponse(receipt);
-    }
-
     public void sendReceipt(Jid jid, Jid participant, List<String> messages, String type) {
         if (messages.isEmpty()) {
+            return;
+        }
+
+        if(jid.hasServer(JidServer.bot())
+                || (participant != null && participant.hasServer(JidServer.bot()))) {
+            // TODO: Implement BOT
             return;
         }
 
@@ -607,7 +649,8 @@ public final class SocketHandler {
                 .put("t", Clock.nowMilliseconds(), () -> Objects.equals(type, "read") || Objects.equals(type, "read-self"))
                 .put("to", jid.withAgent(0))
                 .put("type", type, Objects::nonNull);
-        if (Objects.equals(type, "sender") && jid.hasServer(JidServer.whatsapp())) {
+        if (Objects.equals(type, "sender") && jid.hasServer(JidServer.user())) {
+            Objects.requireNonNull(participant);
             attributes.put("recipient", jid.withAgent(0));
             attributes.put("to", participant.withAgent(0));
         }
@@ -626,46 +669,48 @@ public final class SocketHandler {
                 .toList();
     }
 
-    void sendMessageAck(Jid from, Node node) {
+    public void sendMessageAck(Jid from, Node node) {
         var attrs = node.attributes();
         var type = attrs.getOptionalString("type")
                 .filter(entry -> !Objects.equals(entry, "message"))
                 .orElse(null);
-        var participant = attrs.getNullableString("participant");
-        var recipient = attrs.getNullableString("recipient");
+        var participant = attrs.getOptionalJid("participant")
+                .orElse(null);
+        var recipient = attrs.getOptionalJid("recipient")
+                .orElse(null);
+        if(from.hasServer(JidServer.bot())
+                || (participant != null && participant.hasServer(JidServer.bot()))
+                || (recipient != null && recipient.hasServer(JidServer.bot()))) {
+            // TODO: Implement BOT
+            return;
+        }
+
         var attributes = Attributes.of()
                 .put("id", node.id())
-                .put("to", from)
+                .put("to", from.withAgent(0))
                 .put("class", node.description())
-                .put("participant", participant != null ? Jid.of(participant).withAgent(0) : null)
-                .put("recipient", recipient != null ? Jid.of(recipient).withAgent(0) : null)
+                .put("participant", participant != null ? participant.withAgent(0) : null, Objects::nonNull)
+                .put("recipient", recipient != null ? recipient.withAgent(0) : null, Objects::nonNull)
                 .put("type", type, Objects::nonNull)
                 .toMap();
         sendNodeWithNoResponse(Node.of("ack", attributes));
     }
 
-    void onRegistrationCode(long code) {
+    public void onRegistrationCode(long code) {
         callListenersAsync(listener -> {
             listener.onRegistrationCode(whatsapp, code);
             listener.onRegistrationCode(code);
         });
     }
 
-    void onMetadata(Map<String, String> properties) {
-        callListenersAsync(listener -> {
-            listener.onMetadata(whatsapp, properties);
-            listener.onMetadata(properties);
-        });
-    }
-
-    void onMessageStatus(MessageInfo message) {
+    public void onMessageStatus(MessageInfo message) {
         callListenersAsync(listener -> {
             listener.onMessageStatus(whatsapp, message);
             listener.onMessageStatus(message);
         });
     }
 
-    void onUpdateChatPresence(ContactStatus status, Jid jid, Chat chat) {
+    public void onUpdateChatPresence(ContactStatus status, Jid jid, Chat chat) {
         var contact = store.findContactByJid(jid);
         if (contact.isPresent()) {
             contact.get().setLastKnownPresence(status);
@@ -680,56 +725,56 @@ public final class SocketHandler {
         });
     }
 
-    void onNewMessage(MessageInfo info) {
+    public void onNewMessage(MessageInfo info) {
         callListenersAsync(listener -> {
             listener.onNewMessage(whatsapp, info);
             listener.onNewMessage(info);
         });
     }
 
-    void onNewStatus(ChatMessageInfo info) {
+    public void onNewStatus(ChatMessageInfo info) {
         callListenersAsync(listener -> {
             listener.onNewStatus(whatsapp, info);
             listener.onNewStatus(info);
         });
     }
 
-    void onChatRecentMessages(Chat chat, boolean last) {
+    public void onChatRecentMessages(Chat chat, boolean last) {
         callListenersAsync(listener -> {
-            listener.onChatMessagesSync(whatsapp, chat, last);
-            listener.onChatMessagesSync(chat, last);
+            listener.onWebHistorySyncMessages(whatsapp, chat, last);
+            listener.onWebHistorySyncMessages(chat, last);
         });
     }
 
-    void onFeatures(PrimaryFeature features) {
+    public void onFeatures(PrimaryFeature features) {
         callListenersAsync(listener -> {
-            listener.onFeatures(whatsapp, features.flags());
-            listener.onFeatures(features.flags());
+            listener.onWebAppPrimaryFeatures(whatsapp, features.flags());
+            listener.onWebAppPrimaryFeatures(features.flags());
         });
     }
 
-    void onSetting(Setting setting) {
+    public void onSetting(Setting setting) {
         callListenersAsync(listener -> {
-            listener.onSetting(whatsapp, setting);
-            listener.onSetting(setting);
+            listener.onWebAppStateSetting(whatsapp, setting);
+            listener.onWebAppStateSetting(setting);
         });
     }
 
-    void onMessageDeleted(MessageInfo message, boolean everyone) {
+    public void onMessageDeleted(MessageInfo message, boolean everyone) {
         callListenersAsync(listener -> {
             listener.onMessageDeleted(whatsapp, message, everyone);
             listener.onMessageDeleted(message, everyone);
         });
     }
 
-    void onAction(Action action, MessageIndexInfo indexInfo) {
+    public void onAction(Action action, MessageIndexInfo indexInfo) {
         callListenersAsync(listener -> {
-            listener.onAction(whatsapp, action, indexInfo);
-            listener.onAction(action, indexInfo);
+            listener.onWebAppStateAction(whatsapp, action, indexInfo);
+            listener.onWebAppStateAction(action, indexInfo);
         });
     }
 
-    void onLoggedIn() {
+    public void onLoggedIn() {
         callListenersAsync(listener -> {
             listener.onLoggedIn(whatsapp);
             listener.onLoggedIn();
@@ -750,42 +795,42 @@ public final class SocketHandler {
         }
     }
 
-    void onChats() {
+    public void onChats() {
         callListenersAsync(listener -> {
             listener.onChats(whatsapp, store().chats());
             listener.onChats(store().chats());
         });
     }
 
-    void onNewsletters() {
+    public void onNewsletters() {
         callListenersAsync(listener -> {
             listener.onNewsletters(whatsapp, store().newsletters());
             listener.onNewsletters(store().newsletters());
         });
     }
 
-    void onStatus() {
+    public void onStatus() {
         callListenersAsync(listener -> {
             listener.onStatus(whatsapp, store().status());
             listener.onStatus(store().status());
         });
     }
 
-    void onContacts() {
+    public void onContacts() {
         callListenersAsync(listener -> {
             listener.onContacts(whatsapp, store().contacts());
             listener.onContacts(store().contacts());
         });
     }
 
-    void onHistorySyncProgress(Integer progress, boolean recent) {
+    public void onHistorySyncProgress(Integer progress, boolean recent) {
         callListenersAsync(listener -> {
-            listener.onHistorySyncProgress(whatsapp, progress, recent);
-            listener.onHistorySyncProgress(progress, recent);
+            listener.onWebHistorySyncProgress(whatsapp, progress, recent);
+            listener.onWebHistorySyncProgress(progress, recent);
         });
     }
 
-    void onReply(MessageInfo info) {
+    public void onReply(MessageInfo info) {
         var quoted = info.quotedMessage()
                 .orElse(null);
         if (quoted == null) {
@@ -801,34 +846,11 @@ public final class SocketHandler {
         });
     }
 
-    void onGroupPictureChanged(Chat fromChat) {
-        callListenersAsync(listener -> {
-            listener.onGroupPictureChanged(whatsapp, fromChat);
-            listener.onGroupPictureChanged(fromChat);
-        });
-    }
-
-    void onContactPictureChanged(Contact fromContact) {
+    public void onContactPictureChanged(Contact fromContact) {
         callListenersAsync(listener -> {
             listener.onProfilePictureChanged(whatsapp, fromContact);
             listener.onProfilePictureChanged(fromContact);
         });
-    }
-
-    void onUserAboutChanged(String newAbout, String oldAbout) {
-        callListenersAsync(listener -> {
-            listener.onAboutChanged(whatsapp, oldAbout, newAbout);
-            listener.onAboutChanged(oldAbout, newAbout);
-        });
-    }
-
-    public void onUserPictureChanged() {
-        callListenersAsync(listener -> store().jid()
-                .flatMap(store()::findContactByJid)
-                .ifPresent(selfJid -> {
-                    listener.onProfilePictureChanged(whatsapp, selfJid);
-                    listener.onProfilePictureChanged(selfJid);
-                }));
     }
 
     public void onUserChanged(String newName, String oldName) {
@@ -838,7 +860,7 @@ public final class SocketHandler {
 
         var self = store.jid()
                 .orElseThrow(() -> new IllegalStateException("The session isn't connected"))
-                .toSimpleJid();
+                .withoutData();
         store().findContactByJid(self)
                 .orElseGet(() -> store().addContact(self))
                 .setChosenName(newName);
@@ -869,21 +891,21 @@ public final class SocketHandler {
         });
     }
 
-    void onContactBlocked(Contact contact) {
+    public void onContactBlocked(Contact contact) {
         callListenersAsync(listener -> {
             listener.onContactBlocked(whatsapp, contact);
             listener.onContactBlocked(contact);
         });
     }
 
-    void onNewContact(Contact contact) {
+    public void onNewContact(Contact contact) {
         callListenersAsync(listener -> {
             listener.onNewContact(whatsapp, contact);
             listener.onNewContact(contact);
         });
     }
 
-    void onDevices(LinkedHashMap<Jid, Integer> devices) {
+    public void onDevices(LinkedHashMap<Jid, Integer> devices) {
         callListenersAsync(listener -> {
             listener.onLinkedDevices(whatsapp, devices.keySet());
             listener.onLinkedDevices(devices.keySet());
@@ -904,17 +926,17 @@ public final class SocketHandler {
         });
     }
 
-    void querySessionsForcefully(Jid jid) {
-        messageHandler.querySessions(List.of(jid), true);
+    public void querySessionsForcefully(Jid jid) {
+        messageComponent.querySessions(List.of(jid), true);
     }
 
     private void dispose() {
-        streamHandler.dispose();
-        messageHandler.dispose();
+        streamComponent.dispose();
+        messageComponent.dispose();
         appStateHandler.dispose();
     }
 
-    void handleFailure(Location location, Throwable throwable)  {
+    public void handleFailure(Location location, Throwable throwable)  {
         var result = errorHandler.handleError(whatsapp, location, throwable);
         switch (result) {
             case LOG_OUT -> disconnect(WhatsappDisconnectReason.LOGGED_OUT);
@@ -924,8 +946,8 @@ public final class SocketHandler {
     }
 
     public void querySessions(List<Jid> jid) {
-        messageHandler.querySessions(jid, true);
-        messageHandler.queryDevices(jid, false);
+        messageComponent.querySessions(jid, true);
+        messageComponent.queryDevices(jid, false);
     }
 
     public List<BusinessCategory> queryBusinessCategories() {
@@ -940,7 +962,7 @@ public final class SocketHandler {
     }
 
     public boolean isConnected() {
-        return state.getAcquire() == State.CONNECTED;
+        return state.getAcquire() != State.DISCONNECTED;
     }
 
     public Keys keys() {
@@ -957,14 +979,14 @@ public final class SocketHandler {
     }
 
     @SuppressWarnings("SameParameterValue")
-    void scheduleAtFixedInterval(Runnable command, long initialDelay, long period) {
+    public void scheduleAtFixedInterval(Runnable command, long initialDelay, long period) {
         if (state.getAcquire() == State.CONNECTED) {
             createScheduler();
             scheduler.scheduleAtFixedRate(command, initialDelay, period, SECONDS);
         }
     }
 
-    ScheduledFuture<?> scheduleDelayed(Runnable command, long delay) {
+    public ScheduledFuture<?> scheduleDelayed(Runnable command, long delay) {
         if (state.getAcquire() == State.CONNECTED) {
             createScheduler();
             return scheduler.schedule(command, delay, SECONDS);
@@ -983,11 +1005,11 @@ public final class SocketHandler {
         }
     }
 
-    Node sendPing()  {
+    public Node sendPing()  {
         try {
             var attributes = Attributes.of()
                     .put("xmlns", "w:p")
-                    .put("to", JidServer.whatsapp().toJid())
+                    .put("to", JidServer.user().toJid())
                     .put("type", "get")
                     .put("id", HexFormat.of().formatHex(Bytes.random(10)))
                     .toMap();
@@ -999,42 +1021,21 @@ public final class SocketHandler {
     }
 
     public void updateBusinessCertificate(String newName) {
-        streamHandler.updateBusinessCertificate(newName);
-    }
-
-    public ConcurrentMap<Jid, SequencedSet<ChatPastParticipant>> pastParticipants() {
-        return pastParticipants;
-    }
-
-    public void addPastParticipant(Jid jid, ChatPastParticipant pastParticipant) {
-        var pastParticipants = pastParticipants().get(jid);
-        if (pastParticipants != null) {
-            pastParticipants.add(pastParticipant);
-            this.pastParticipants.put(jid, pastParticipants);
-        } else {
-            var values = new LinkedHashSet<ChatPastParticipant>();
-            values.add(pastParticipant);
-            this.pastParticipants.put(jid, values);
-        }
-    }
-
-    public void addPastParticipant(Jid jid, Collection<? extends ChatPastParticipant> pastParticipant) {
-        var pastParticipants = pastParticipants().get(jid);
-        if (pastParticipants != null) {
-            pastParticipants.addAll(pastParticipant);
-            this.pastParticipants.put(jid, pastParticipants);
-        } else {
-            var values = new LinkedHashSet<ChatPastParticipant>(pastParticipant);
-            this.pastParticipants.put(jid, values);
-        }
-    }
-
-    void queryNewsletters()  {
-        try {
-            streamHandler.queryNewsletters();
-        }catch (Throwable throwable) {
-            handleFailure(HISTORY_SYNC, throwable);
-        }
+        var details = new BusinessVerifiedNameDetailsBuilder()
+                .name(Objects.requireNonNullElse(newName, store.name()))
+                .issuer("smb:wa")
+                .serial(Math.abs(ThreadLocalRandom.current().nextLong()))
+                .build();
+        var encodedDetails = BusinessVerifiedNameDetailsSpec.encode(details);
+        var certificate = new BusinessVerifiedNameCertificateBuilder()
+                .encodedDetails(encodedDetails)
+                .signature(Curve25519.sign(keys().identityKeyPair().privateKey(), encodedDetails))
+                .build();
+        var result = sendQuery("set", "w:biz", Node.of("verified_name", Map.of("v", 2), BusinessVerifiedNameCertificateSpec.encode(certificate)));
+        var verifiedName = result.findChild("verified_name")
+                .map(node -> node.attributes().getString("id"))
+                .orElse("");
+        store.setVerifiedName(verifiedName);
     }
 
     public Optional<Newsletter> queryNewsletter(Jid newsletterJid, NewsletterViewerRole role) {
@@ -1050,7 +1051,7 @@ public final class SocketHandler {
                 .map(NewsletterResponse::newsletter);
     }
 
-    void resolvePendingRequest(Node node) {
+    public void resolvePendingRequest(Node node) {
         var id = node.id();
         if(id == null) {
             return;
@@ -1076,7 +1077,176 @@ public final class SocketHandler {
     }
 
     public Node createCall(JidProvider jid) {
-        return messageHandler.createCall(jid);
+        return messageComponent.createCall(jid);
+    }
+
+    public void serializeAsync() {
+        Thread.startVirtualThread(store::serialize);
+        Thread.startVirtualThread(keys::serialize);
+    }
+
+    public void addMe(Jid companion) {
+        var contact = new ContactBuilder()
+                .jid(companion)
+                .chosenName(store.name())
+                .lastKnownPresence(ContactStatus.AVAILABLE)
+                .lastSeenSeconds(Clock.nowSeconds())
+                .blocked(false)
+                .build();
+        store.addContact(contact);
+    }
+
+    public void sendPreKeys(int size) {
+        var startId = keys.lastPreKeyId() + 1;
+        var preKeys = IntStream.range(startId, startId + size)
+                .mapToObj(SignalPreKeyPair::random)
+                .peek(keys::addPreKey)
+                .map(SignalPreKeyPair::toNode)
+                .toList();
+        sendQuery(
+                "set",
+                "encrypt",
+                Node.of("registration", keys.encodedRegistrationId()),
+                Node.of("type", KEY_BUNDLE_TYPE),
+                Node.of("identity", keys.identityKeyPair().publicKey()),
+                Node.of("list", preKeys),
+                keys.signedKeyPair().toNode()
+        );
+    }
+
+    public void addPrivacySetting(Node node, boolean update) {
+        var privacySettingName = node.attributes().getString("name");
+        var privacyType = PrivacySettingType.of(privacySettingName);
+        if(privacyType.isEmpty()) {
+            return;
+        }
+
+        var privacyValueName = node.attributes().getString("value");
+        var privacyValue = PrivacySettingValue.of(privacyValueName);
+        if(privacyValue.isEmpty()) {
+            return;
+        }
+
+        if (!update) {
+            var response = queryPrivacyExcludedContacts(privacyType.get(), privacyValue.get());
+            var newEntry = new PrivacySettingEntryBuilder()
+                    .type(privacyType.get())
+                    .value(privacyValue.get())
+                    .excluded(response)
+                    .build();
+            store.addPrivacySetting(privacyType.get(), newEntry);
+        }else {
+            var oldEntry = store.findPrivacySetting(privacyType.get());
+            var newValues = getUpdatedBlockedList(node, oldEntry, privacyValue.get());
+            var newEntry = new PrivacySettingEntryBuilder()
+                    .type(privacyType.get())
+                    .value(privacyValue.get())
+                    .excluded(newValues)
+                    .build();
+            store.addPrivacySetting(privacyType.get(), newEntry);
+            onPrivacySettingChanged(oldEntry, newEntry);
+        }
+    }
+
+    private List<Jid> queryPrivacyExcludedContacts(PrivacySettingType type, PrivacySettingValue value) {
+        if (value != PrivacySettingValue.CONTACTS_EXCEPT) {
+            return List.of();
+        }
+
+        var result = sendQuery("get", "privacy", Node.of("privacy", Node.of("list", Map.of("name", type.data(), "value", value.data()))));
+        return result.findChild("privacy")
+                .flatMap(node -> node.findChild("list"))
+                .map(node -> node.listChildren("user"))
+                .stream()
+                .flatMap(Collection::stream)
+                .map(user -> user.attributes().getOptionalJid("jid"))
+                .flatMap(Optional::stream)
+                .toList();
+    }
+
+    private List<Jid> getUpdatedBlockedList(Node node, PrivacySettingEntry privacyEntry, PrivacySettingValue privacyValue) {
+        if (privacyValue != PrivacySettingValue.CONTACTS_EXCEPT) {
+            return List.of();
+        }
+
+        var newValues = new ArrayList<>(privacyEntry.excluded());
+        for (var entry : node.listChildren("user")) {
+            var jid = entry.attributes()
+                    .getRequiredJid("jid");
+            if (entry.attributes().hasValue("action", "add")) {
+                newValues.add(jid);
+                continue;
+            }
+
+            newValues.remove(jid);
+        }
+        return newValues;
+    }
+
+    public void updateUserAbout(boolean update) {
+        var user = store.jid()
+                .orElse(null);
+        if(user == null) {
+            return;
+        }
+        
+        var response = queryAbout(user.withoutData())
+                .orElse(null);
+        if(response == null) {
+            return;
+        }
+
+        var oldAbout = store.about()
+                .orElse(null);
+        var newAbout = response.about()
+                .orElse(null);
+        store.setAbout(newAbout);
+        if (update) {
+            callListenersAsync(listener -> {
+                listener.onAboutChanged(whatsapp, oldAbout, newAbout);
+                listener.onAboutChanged(oldAbout, newAbout);
+            });
+        }
+    }
+
+    public void updateUserPicture(boolean update) {
+        var user = store.jid()
+                .orElse(null);
+        if(user == null) {
+            return;
+        }
+        
+        var result = queryPicture(user.withoutData());
+        store.setProfilePicture(result.orElse(null));
+        if (update) {
+            callListenersAsync(listener -> {
+                listener.onProfilePictureChanged(whatsapp, user.withoutData());
+                listener.onProfilePictureChanged(user.withoutData());
+            });
+        }
+    }
+
+    public byte[] encryptPairingKey() {
+        return pairingCodeSession.encrypt(keys.companionKeyPair().publicKey());
+    }
+
+    public byte[] decryptPairingKey(byte[] primaryEphemeralPublicKeyWrapped) {
+        return pairingCodeSession.decrypt(primaryEphemeralPublicKeyWrapped);
+    }
+
+    public WhatsappVerificationHandler.Web webVerificationHandler() {
+        return webVerificationHandler;
+    }
+
+    public void handle(WhatsappVerificationHandler.Web.PairingCode webHandler) {
+        pairingCodeSession.accept(webHandler);
+    }
+
+    public void onPastParticipants(Jid chatJid, List<ChatPastParticipant> chatPastParticipants) {
+        callListenersAsync(listener -> {
+            listener.onWebHistorySyncPastParticipants(whatsapp, chatJid, chatPastParticipants);
+            listener.onWebHistorySyncPastParticipants(chatJid, chatPastParticipants);
+        });
     }
 
     private enum State {
@@ -1114,13 +1284,13 @@ public final class SocketHandler {
                 synchronized (this) {
                     if (response == null) {
                         try {
-                            wait(SocketHandler.TIMEOUT.toMillis());
+                            wait(SocketConnection.TIMEOUT.toMillis());
                         }catch (InterruptedException exception) {
                             throw new RuntimeException("Cannot wait for response", exception);
                         }
                     }
                     if(response == null) {
-                        throw new RuntimeException("The timeout of " + SocketHandler.TIMEOUT + " has expired for " + body);
+                        throw new RuntimeException("The timeout of " + SocketConnection.TIMEOUT + " has expired for " + body);
                     }
                 }
             }

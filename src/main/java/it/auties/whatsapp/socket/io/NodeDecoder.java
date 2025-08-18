@@ -1,4 +1,4 @@
-package it.auties.whatsapp.io;
+package it.auties.whatsapp.socket.io;
 
 import it.auties.whatsapp.model.jid.Jid;
 import it.auties.whatsapp.model.jid.JidServer;
@@ -13,15 +13,15 @@ import java.util.List;
 import java.util.Objects;
 import java.util.zip.InflaterInputStream;
 
-import static it.auties.whatsapp.io.BinaryNodeTag.*;
-import static it.auties.whatsapp.io.BinaryNodeTokens.*;
+import static it.auties.whatsapp.socket.io.NodeTags.*;
+import static it.auties.whatsapp.socket.io.NodeTokens.*;
 
-public final class BinaryNodeDecoder {
+public final class NodeDecoder {
     private static final List<Character> NIBBLE_ALPHABET = List.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '.', '�', '�', '�', '�');
     private static final List<Character> HEX_ALPHABET = List.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F');
 
-    private BinaryNodeDecoder() {
-        // Utility class
+    private NodeDecoder() {
+        throw new UnsupportedOperationException("This is a utility class and cannot be instantiated");
     }
 
     public static Node decode(InputStream stream) throws IOException {
@@ -89,7 +89,7 @@ public final class BinaryNodeDecoder {
         return inputStream.readNBytes(size);
     }
 
-    private static String readDictionaryToken(InputStream inputStream, BinaryNodeTokens dictionary) throws IOException {
+    private static String readDictionaryToken(InputStream inputStream, NodeTokens dictionary) throws IOException {
         var index = inputStream.read() & 0xFF;
         return dictionary.get(index);
     }
@@ -114,7 +114,7 @@ public final class BinaryNodeDecoder {
         var tag = (byte) inputStream.read();
         return switch (tag) {
             case LIST_EMPTY -> null;
-            case COMPANION_JID -> readCompanionJid(inputStream);
+            case AD_JID -> readAdJid(inputStream);
             case LIST_8 -> readList8(inputStream);
             case LIST_16 -> readList16(inputStream);
             case JID_PAIR -> readJidPair(inputStream);
@@ -174,18 +174,18 @@ public final class BinaryNodeDecoder {
         return user == null ? Jid.of(server) : Jid.of(user, server);
     }
 
-    private static Jid readCompanionJid(InputStream inputStream) throws IOException {
+    private static Jid readAdJid(InputStream inputStream) throws IOException {
         var agent = inputStream.read() & 0xFF;
-        var device =  inputStream.read() & 0xFF;
+        var device = inputStream.read() & 0xFF;
         var user = readString(inputStream);
-        return Jid.of(user, JidServer.whatsapp(), device, agent);
+        return Jid.of(user, JidServer.user(), device, agent);
     }
 
     private static Object readContent(InputStream inputStream) throws IOException {
         var tag = (byte) inputStream.read();
         return switch (tag) {
             case LIST_EMPTY -> null;
-            case COMPANION_JID -> readCompanionJid(inputStream);
+            case AD_JID -> readAdJid(inputStream);
             case LIST_8 -> readList8(inputStream);
             case LIST_16 -> readList16(inputStream);
             case JID_PAIR -> readJidPair(inputStream);

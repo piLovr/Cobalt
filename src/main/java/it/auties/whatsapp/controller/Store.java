@@ -290,13 +290,7 @@ public final class Store extends Controller {
     @ProtobufProperty(index = 39, type = ProtobufType.BOOL)
     boolean checkPatchMacs;
 
-    /**
-     * The setting to use when uploading/downloading medias
-     */
-    @ProtobufProperty(index = 42, type = ProtobufType.ENUM)
-    WhatsappMediaPolicy whatsappMediaPolicy;
-
-    Store(UUID uuid, PhoneNumber phoneNumber, WhatsappClientType clientType, Collection<String> alias, URI proxy, boolean online, CountryLocale locale, String name, String verifiedName, String businessAddress, Double businessLongitude, Double businessLatitude, String businessDescription, String businessWebsite, String businessEmail, BusinessCategory businessCategory, String deviceHash, LinkedHashMap<Jid, Integer> linkedDevicesKeys, URI profilePicture, String about, Jid jid, Jid lid, ConcurrentHashMap<String, String> properties, ConcurrentHashMap<Jid, Contact> contacts, KeySetView<ChatMessageInfo, Boolean> status, ConcurrentHashMap<String, PrivacySettingEntry> privacySettings, ConcurrentHashMap<String, Call> calls, boolean unarchiveChats, boolean twentyFourHourFormat, Long initializationTimeStamp, ChatEphemeralTimer newChatsEphemeralTimer, WhatsappTextPreviewPolicy whatsappTextPreviewPolicy, WhatsappWebHistoryPolicy historyLength, boolean automaticPresenceUpdates, boolean automaticMessageReceipts, ReleaseChannel releaseChannel, CompanionDevice device, boolean checkPatchMacs, WhatsappMediaPolicy whatsappMediaPolicy) {
+    Store(UUID uuid, PhoneNumber phoneNumber, WhatsappClientType clientType, Collection<String> alias, URI proxy, boolean online, CountryLocale locale, String name, String verifiedName, String businessAddress, Double businessLongitude, Double businessLatitude, String businessDescription, String businessWebsite, String businessEmail, BusinessCategory businessCategory, String deviceHash, LinkedHashMap<Jid, Integer> linkedDevicesKeys, URI profilePicture, String about, Jid jid, Jid lid, ConcurrentHashMap<String, String> properties, ConcurrentHashMap<Jid, Contact> contacts, KeySetView<ChatMessageInfo, Boolean> status, ConcurrentHashMap<String, PrivacySettingEntry> privacySettings, ConcurrentHashMap<String, Call> calls, boolean unarchiveChats, boolean twentyFourHourFormat, Long initializationTimeStamp, ChatEphemeralTimer newChatsEphemeralTimer, WhatsappTextPreviewPolicy whatsappTextPreviewPolicy, WhatsappWebHistoryPolicy historyLength, boolean automaticPresenceUpdates, boolean automaticMessageReceipts, ReleaseChannel releaseChannel, CompanionDevice device, boolean checkPatchMacs) {
         super(uuid, phoneNumber, null, clientType, alias);
         this.proxy = proxy;
         this.online = online;
@@ -336,7 +330,6 @@ public final class Store extends Controller {
         this.releaseChannel = Objects.requireNonNullElse(releaseChannel, ReleaseChannel.RELEASE);
         this.device = device;
         this.checkPatchMacs = checkPatchMacs;
-        this.whatsappMediaPolicy = Objects.requireNonNullElse(whatsappMediaPolicy, WhatsappMediaPolicy.ALL);
     }
 
     public static Store of(UUID uuid, PhoneNumber phoneNumber, Collection<String> alias, WhatsappClientType clientType) {
@@ -363,7 +356,7 @@ public final class Store extends Controller {
         return switch (jid) {
             case Contact contact -> Optional.of(contact);
             case null -> Optional.empty();
-            default -> Optional.ofNullable(contacts.get(jid.toJid().toSimpleJid()));
+            default -> Optional.ofNullable(contacts.get(jid.toJid().withoutData()));
         };
     }
 
@@ -441,15 +434,19 @@ public final class Store extends Controller {
             case Newsletter newsletter -> findMessageById(newsletter, id);
             case Contact contact -> findChatByJid(contact.jid())
                     .flatMap(chat -> findMessageById(chat, id));
-            case Jid contactJid -> switch (contactJid.type()) {
-                case NEWSLETTER -> findNewsletterByJid(contactJid)
-                        .flatMap(newsletter -> findMessageById(newsletter, id));
-                case STATUS -> status.stream()
-                        .filter(entry -> Objects.equals(entry.chatJid(), provider.toJid()) && Objects.equals(entry.id(), id))
-                        .findFirst();
-                default -> findChatByJid(contactJid)
-                        .flatMap(chat -> findMessageById(chat, id));
-            };
+            case Jid contactJid -> {
+                if (contactJid.server().type() == JidServer.Type.NEWSLETTER) {
+                    yield findNewsletterByJid(contactJid)
+                            .flatMap(newsletter -> findMessageById(newsletter, id));
+                } else if (Jid.statusBroadcastAccount().equals(contactJid)) {
+                    yield status.stream()
+                            .filter(entry -> Objects.equals(entry.chatJid(), provider.toJid()) && Objects.equals(entry.id(), id))
+                            .findFirst();
+                } else {
+                    yield findChatByJid(contactJid)
+                            .flatMap(chat -> findMessageById(chat, id));
+                }
+            }
             case JidServer jidServer -> findChatByJid(jidServer.toJid())
                     .flatMap(chat -> findMessageById(chat, id));
         };
@@ -672,7 +669,7 @@ public final class Store extends Controller {
      * @return the old chat, if present
      */
     public Optional<Chat> addChat(Chat chat) {
-        if (chat.hasName() && chat.jid().hasServer(JidServer.whatsapp())) {
+        if (chat.hasName() && chat.jid().hasServer(JidServer.user())) {
             var contact = findContactByJid(chat.jid())
                     .orElseGet(() -> addContact(chat.jid()));
             contact.setFullName(chat.name());
@@ -1177,10 +1174,6 @@ public final class Store extends Controller {
         return this.whatsappTextPreviewPolicy;
     }
 
-    public WhatsappMediaPolicy mediaProxySetting() {
-        return this.whatsappMediaPolicy;
-    }
-
     public WhatsappWebHistoryPolicy webHistorySetting() {
         return this.historyLength;
     }
@@ -1285,10 +1278,6 @@ public final class Store extends Controller {
         this.whatsappTextPreviewPolicy = whatsappTextPreviewPolicy;
     }
 
-    public void setMediaProxySetting(WhatsappMediaPolicy whatsappMediaPolicy) {
-        this.whatsappMediaPolicy = whatsappMediaPolicy;
-    }
-
     public void setWebHistorySetting(WhatsappWebHistoryPolicy whatsappWebHistoryPolicy) {
         this.historyLength = whatsappWebHistoryPolicy;
     }
@@ -1361,12 +1350,11 @@ public final class Store extends Controller {
                 whatsappTextPreviewPolicy == store.whatsappTextPreviewPolicy &&
                 Objects.equals(historyLength, store.historyLength) &&
                 releaseChannel == store.releaseChannel &&
-                Objects.equals(device, store.device) &&
-                whatsappMediaPolicy == store.whatsappMediaPolicy;
+                Objects.equals(device, store.device);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(proxy, version, online, locale, name, verifiedName, businessAddress, businessLongitude, businessLatitude, businessDescription, businessWebsite, businessEmail, businessCategory, deviceHash, linkedDevicesKeys, profilePicture, about, jid, lid, properties, contacts, status, privacySettings, calls, unarchiveChats, twentyFourHourFormat, initializationTimeStamp, newChatsEphemeralTimer, whatsappTextPreviewPolicy, historyLength, automaticPresenceUpdates, automaticMessageReceipts, releaseChannel, device, checkPatchMacs, whatsappMediaPolicy);
+        return Objects.hash(proxy, version, online, locale, name, verifiedName, businessAddress, businessLongitude, businessLatitude, businessDescription, businessWebsite, businessEmail, businessCategory, deviceHash, linkedDevicesKeys, profilePicture, about, jid, lid, properties, contacts, status, privacySettings, calls, unarchiveChats, twentyFourHourFormat, initializationTimeStamp, newChatsEphemeralTimer, whatsappTextPreviewPolicy, historyLength, automaticPresenceUpdates, automaticMessageReceipts, releaseChannel, device, checkPatchMacs);
     }
 }

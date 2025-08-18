@@ -8,6 +8,7 @@ import it.auties.whatsapp.model.signal.keypair.SignalKeyPair;
 import it.auties.whatsapp.model.signal.keypair.SignalSignedKeyPair;
 import it.auties.whatsapp.model.signal.message.*;
 import it.auties.whatsapp.model.signal.sender.SenderKeyName;
+import it.auties.whatsapp.model.signal.sender.SenderKeyRecord;
 import it.auties.whatsapp.model.signal.sender.SenderKeyState;
 import it.auties.whatsapp.model.signal.sender.SenderMessageKey;
 import it.auties.whatsapp.model.signal.session.*;
@@ -27,14 +28,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static it.auties.whatsapp.util.SignalConstants.*;
 
-public final class SignalSessionCipher {
+public final class SignalSession {
     private final Keys keys;
 
-    public SignalSessionCipher(Keys keys) {
+    public SignalSession(Keys keys) {
         this.keys = keys;
     }
 
-    public CipheredMessageResult encrypt(SessionAddress address, byte[] data) {
+    public Result encrypt(SessionAddress address, byte[] data) {
         try {
             var currentState = keys.findSessionByAddress(address)
                     .orElseThrow(() -> new NoSuchElementException("Missing session for " + address))
@@ -69,7 +70,7 @@ public final class SignalSessionCipher {
                     secrets[1]
             );
             if (!currentState.hasPreKey()) {
-                return new CipheredMessageResult(
+                return new Result(
                         message.serialized(),
                         currentState.hasPreKey() ? PKMSG : MSG
                 );
@@ -83,7 +84,7 @@ public final class SignalSessionCipher {
                         keys.registrationId(),
                         currentState.pendingPreKey().signedKeyId()
                 );
-                return new CipheredMessageResult(
+                return new Result(
                         preKeyMessage.serialized(),
                         currentState.hasPreKey() ? PKMSG : MSG
                 );
@@ -353,10 +354,12 @@ public final class SignalSessionCipher {
         }
     }
 
-    public CipheredMessageResult encrypt(SenderKeyName name, byte[] data) {
+    public Result encrypt(SenderKeyName name, byte[] data) {
         try {
             var currentState = keys.findSenderKeyByName(name)
-                    .firstState();
+                    .orElseThrow(() -> new NoSuchElementException("Cannot find sender key for " + name))
+                    .firstState()
+                    .orElseThrow(() -> new NoSuchElementException("No sender key state for " + name));
             var messageKey = currentState.chainKey()
                     .toMessageKey();
             var cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
@@ -372,17 +375,18 @@ public final class SignalSessionCipher {
             );
             var next = currentState.chainKey().next();
             currentState.setChainKey(next);
-            return new CipheredMessageResult(senderKeyMessage.serialized(), SignalConstants.SKMSG);
+            return new Result(senderKeyMessage.serialized(), SignalConstants.SKMSG);
         } catch (GeneralSecurityException exception) {
             throw new IllegalArgumentException("Cannot encrypt data", exception);
         }
     }
 
     public byte[] decrypt(SenderKeyName name, byte[] data) {
-        var record = keys.findSenderKeyByName(name);
+        var record = keys.findSenderKeyByName(name)
+                .orElseThrow(() -> new NoSuchElementException("Cannot find sender key for " + name));
         var senderKeyMessage = SenderKeyMessage.ofSerialized(data);
         var senderKeyState = record.findStateById(senderKeyMessage.id())
-                .orElseThrow(() -> new NoSuchElementException("Cannot find sender key for " + name + " with id " + senderKeyMessage.id()));
+                .orElseThrow(() -> new NoSuchElementException("Cannot find sender key state for " + name + " with id " + senderKeyMessage.id()));
         try {
             var senderKey = getSenderKey(senderKeyState, senderKeyMessage.iteration());
             var cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
@@ -409,11 +413,17 @@ public final class SignalSessionCipher {
     }
 
     public byte[] createOutgoing(SenderKeyName name) {
-        var record = keys.findSenderKeyByName(name);
-        if (record.isEmpty()) {
-            record.addState(randomId(), SignalKeyPair.random(), 0, Bytes.random(32));
-        }
-        var state = record.firstState();
+        var record = keys.findSenderKeyByName(name).orElseGet(() -> {
+            var newRecord = new SenderKeyRecord();
+            keys.addSenderKey(name, newRecord);
+            return newRecord;
+        });
+        var state = record.firstState().orElseGet(() -> record.addState(
+                randomId(),
+                SignalKeyPair.random(),
+                0,
+                Bytes.random(32)
+        ));
         var message = new SignalDistributionMessage(
                 CURRENT_VERSION,
                 state.id(),
@@ -422,6 +432,20 @@ public final class SignalSessionCipher {
                 state.signingKey().signalPublicKey()
         );
         return message.serialized();
+    }
+
+    public void createIncoming(SenderKeyName name, SignalDistributionMessage message) {
+        var record = keys.findSenderKeyByName(name).orElseGet(() -> {
+            var newRecord = new SenderKeyRecord();
+            keys.addSenderKey(name, newRecord);
+            return newRecord;
+        });
+        record.addState(
+                message.id(),
+                message.signingKey(),
+                message.iteration(),
+                message.chainKey()
+        );
     }
 
     private int randomId() {
@@ -434,8 +458,21 @@ public final class SignalSessionCipher {
         }
     }
 
-    public void createIncoming(SenderKeyName name, SignalDistributionMessage message) {
-        var record = keys.findSenderKeyByName(name);
-        record.addState(message.id(), message.signingKey(), message.iteration(), message.chainKey());
+    public static final class Result {
+        private final byte[] message;
+        private final String type;
+
+        Result(byte[] message, String type) {
+            this.message = message;
+            this.type = type;
+        }
+
+        public byte[] message() {
+            return message;
+        }
+
+        public String type() {
+            return type;
+        }
     }
 }
