@@ -1,5 +1,4 @@
 module it.auties.cobalt {
-    // Cryptography
     requires it.auties.curve;
 
     // QR related dependencies
@@ -12,7 +11,7 @@ module it.auties.cobalt {
     requires it.auties.protobuf.base;
     requires com.alibaba.fastjson2;
 
-    // Generate extendedMessage previews
+    // Generate message previews
     requires it.auties.linkpreview;
     requires com.aspose.words;
     requires com.github.kokorin.jaffree;
@@ -24,6 +23,7 @@ module it.auties.cobalt {
 
     // Web api
     requires java.net.http;
+    requires java.logging;
 
     exports it.auties.whatsapp.api;
     exports it.auties.whatsapp.controller;
@@ -33,15 +33,15 @@ module it.auties.cobalt {
     exports it.auties.whatsapp.model.contact;
     exports it.auties.whatsapp.model.info;
     exports it.auties.whatsapp.model.media;
-    exports it.auties.whatsapp.model.extendedMessage.server;
-    exports it.auties.whatsapp.model.extendedMessage.model;
-    exports it.auties.whatsapp.model.extendedMessage.payment;
-    exports it.auties.whatsapp.model.extendedMessage.standard;
+    exports it.auties.whatsapp.model.message.server;
+    exports it.auties.whatsapp.model.message.model;
+    exports it.auties.whatsapp.model.message.payment;
+    exports it.auties.whatsapp.model.message.standard;
     exports it.auties.whatsapp.model.product;
     exports it.auties.whatsapp.model.setting;
     exports it.auties.whatsapp.model.response;
     exports it.auties.whatsapp.model.payment;
-    exports it.auties.whatsapp.model.extendedMessage.button;
+    exports it.auties.whatsapp.model.message.button;
     exports it.auties.whatsapp.model.privacy;
     exports it.auties.whatsapp.model.poll;
     exports it.auties.whatsapp.model.mobile;
@@ -60,6 +60,4 @@ module it.auties.cobalt {
     exports it.auties.whatsapp.model.jid;
     exports it.auties.whatsapp.model.newsletter;
     exports it.auties.whatsapp.exception;
-    exports it.auties.whatsapp.model.message.model;
-    exports it.auties.whatsapp.model.message.standard;
 }
